@@ -2,8 +2,6 @@
 ;; (.github/workflows/build-x86_64-desktop.yml): the Roguix desktop's pin,
 ;; try-roguix's guest/guix/modules/roguix/guix-commit, with nonguix for the
 ;; MacBook's kernel, as guix-x86_64-iso-omguix's channels-roguix.lock.scm.
-;; Separate from channels.scm, the server's pin: a different commit changes
-;; every store path, so each pin has its own job and release.
 (list (channel
        (name 'nonguix)
        (url "https://gitlab.com/nonguix/nonguix")

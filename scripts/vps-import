@@ -6,10 +6,10 @@
 #
 #   scripts/vps-import [-p PREFIX] [TAG]
 #
-# PREFIX names the feed: x86_64 (the default) is the server's
-# (build-x86_64.yml, channels.scm), x86_64-desktop the Roguix desktop's
-# (build-x86_64-desktop.yml, channels-desktop.scm).  A TAG names its feed
-# itself: PREFIX-DATE-COMMIT-ATTEMPT.
+# PREFIX names the feed: x86_64-desktop (the default and the only one
+# left) is the Roguix desktop's (build-x86_64-desktop.yml,
+# channels-desktop.scm).  A TAG names its feed itself:
+# PREFIX-DATE-COMMIT-ATTEMPT.
 set -euo pipefail
 repo=roguixos/roguix
 prefix=
@@ -21,8 +21,9 @@ if [ -n "${1:-}" ]; then
   tag=$1
   prefix=${prefix:-${tag%-*-*-*}}
 else
-  prefix=${prefix:-x86_64}
-  # A date follows the prefix, so x86_64 does not match x86_64-desktop.
+  prefix=${prefix:-x86_64-desktop}
+  # A date follows the prefix, so the retired server feed's x86_64-DATE
+  # tags never match.
   tag=$(curl -sf "https://api.github.com/repos/$repo/releases?per_page=100" |
     grep -o "\"tag_name\": *\"$prefix-[0-9][^\"]*\"" | head -1 | cut -d'"' -f4)
   [ -n "$tag" ] || { echo "vps-import: no $prefix release" >&2; exit 1; }

@@ -3,8 +3,7 @@
 # TRY_ROGUIX_COMMIT, and publish, as a release, the store items neither
 # bordeaux nor roguix.frolow.dev serves (no release when there are none),
 # signed with the builder key (modules/roguix/builder.pub), for
-# roguix.frolow.dev to import (scripts/vps-import -p x86_64-desktop).
-# The server's feed, build-x86_64.yml, has its own pin and release.
+# roguix.frolow.dev to import (scripts/vps-import).
 name: build-x86_64-desktop
 
 on:

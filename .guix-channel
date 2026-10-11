@@ -1,6 +1,6 @@
-;; Roguix's hand-maintained Guix modules: packages Guix lacks and the
-;; systems they run on.  The Roguix desktop's own modules are in
-;; try-roguix and published as roguix-channel.
+;; No modules of its own any more: modules/ keeps only CI's builder key.
+;; The Roguix desktop's modules are in try-roguix and published as
+;; roguix-channel.
 (channel
  (version 0)
  (directory "modules"))
