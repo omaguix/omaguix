@@ -31,6 +31,18 @@ never built and compiles them itself. To move on: change the commit, let
 CI build and publish, `scripts/vps-import` on the VPS, then
 `guix pull -C channels.scm` there and reconfigure.
 
+## Guix on the runners
+
+Both workflows install Guix with `scripts/ci-install-guix`: the Guix
+1.5.0 binary tarball from `ftpmirror.gnu.org`, or, if that fails, the copy
+in this repository's `guix-binary-1.5.0` release, checked against the
+sha256 pinned in the script, with a root guix-daemon and bordeaux's and
+ci's keys authorized; it never runs `guix pull` (the jobs use
+`guix time-machine`). To update: verify the new tarball's `.sig` from
+`ftp.gnu.org` with `gpg --verify` against the release signing key, change
+`VERSION` and `SHA256` in the script, and upload the tarball to a release
+`guix-binary-VERSION` here.
+
 ## Publishing
 
 On a push to `main` touching packages, the manifest or the pin,

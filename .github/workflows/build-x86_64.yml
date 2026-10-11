@@ -33,9 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: PromyLOPh/guix-install-action@40615e98e5c16a451aec10fe01c214ed07cbaa77 # v1.6
-        with:
-          pullAfterInstall: false
+      - name: Install Guix
+        run: scripts/ci-install-guix
 
       - name: Get the Guix of channels.scm
         run: guix time-machine -C channels.scm -- describe

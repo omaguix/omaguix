@@ -65,9 +65,8 @@ jobs:
           grep -q "(commit \"$modules\")" channels-desktop.scm ||
             { echo "channels-desktop.scm is not on Guix $modules"; exit 1; }
 
-      - uses: PromyLOPh/guix-install-action@40615e98e5c16a451aec10fe01c214ed07cbaa77 # v1.6
-        with:
-          pullAfterInstall: false
+      - name: Install Guix
+        run: scripts/ci-install-guix
 
       - name: Trust nonguix and roguix.frolow.dev substitutes
         run: |

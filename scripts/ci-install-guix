@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Install Guix from the release binary tarball on a GitHub Actions
+# ubuntu-24.04 runner, as PromyLOPh/guix-install-action v1.6 did with
+# pullAfterInstall: false, but from a pinned release instead of
+# ci.guix.gnu.org's latest nightly.  Run as the runner user; it uses sudo.
+#
+# To move to another release: change VERSION and SHA256 (the sha256 of the
+# tarball, taken only after `gpg --verify` of its .sig from ftp.gnu.org
+# printed "Good signature"), and upload the tarball as an asset of a
+# release guix-binary-VERSION of roguixos/roguix (the fallback below).
+set -euo pipefail
+
+VERSION=1.5.0
+SHA256=aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817
+TARBALL=guix-binary-$VERSION.x86_64-linux.tar.xz
+URLS=(
+  "https://ftpmirror.gnu.org/gnu/guix/$TARBALL"
+  "https://github.com/roguixos/roguix/releases/download/guix-binary-$VERSION/$TARBALL"
+)
+GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
+SOCKET=/var/guix/daemon-socket/socket
+
+tmp=${RUNNER_TEMP:-$(mktemp -d)}
+tarball=$tmp/$TARBALL
+
+downloaded=
+for url in "${URLS[@]}"; do
+  echo "Downloading $url"
+  if curl -fL --no-progress-meter -o "$tarball" "$url"; then
+    downloaded=$url
+    break
+  fi
+done
+test -n "$downloaded" || { echo "No mirror served $TARBALL"; exit 1; }
+echo "$SHA256  $tarball" | sha256sum -c -
+
+# Ubuntu's default locale, C.UTF-8, does not exist in Guix's glibc.
+echo LANG=en_US.utf8 >> "$GITHUB_ENV"
+
+sudo tar --extract --file "$tarball" -C / --no-overwrite-dir
+rm "$tarball"
+
+sudo groupadd --system guixbuild
+for i in $(seq -w 1 10); do
+  sudo useradd -g guixbuild -G guixbuild -d /var/empty \
+    -s "$(command -v nologin)" -c "Guix build user $i" --system "guixbuilder$i"
+done
+
+# The tarball's guix-daemon.service runs the daemon unprivileged, which needs
+# unprivileged user namespaces that Ubuntu 24.04's AppArmor restricts; run it
+# as root with build users, like the action.
+sudo cp "$GUIX_PATH/lib/systemd/system/gnu-store.mount" /etc/systemd/system/
+sudo tee /etc/systemd/system/guix-daemon.service > /dev/null <<EOF
+[Unit]
+Description=Build daemon for GNU Guix
+
+[Service]
+ExecStart=$GUIX_PATH/bin/guix-daemon --build-users-group=guixbuild --discover=no
+Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+OOMPolicy=continue
+Restart=always
+TasksMax=8192
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo chmod 644 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
+sudo systemctl daemon-reload
+sudo systemctl enable --now gnu-store.mount guix-daemon.service
+
+# systemd reports the daemon started once it is exec'd, before it listens.
+for _ in $(seq 50); do
+  test -S "$SOCKET" && break
+  sleep 0.2 # delay: polling for the socket guix-daemon creates on start
+done
+test -S "$SOCKET" || { sudo systemctl status guix-daemon; exit 1; }
+
+echo "$GUIX_PATH/bin" >> "$GITHUB_PATH"
+
+# shellcheck disable=SC2024 # the keys are world-readable
+for key in "$GUIX_PATH"/share/guix/{bordeaux,ci}.guix.gnu.org.pub; do
+  sudo "$GUIX_PATH/bin/guix" archive --authorize < "$key"
+done
+sudo "$GUIX_PATH/bin/guix" archive --generate-key
+
+"$GUIX_PATH/bin/guix" describe
