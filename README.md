@@ -76,9 +76,9 @@ files, `.github/workflows/build-x86_64-desktop.yml` checks out
 pins (`TRY_ROGUIX_COMMIT`; rofrol/roguix-channel lags behind it), builds
 the 16 packages of `manifests/x86_64-desktop.scm` without grafts, and makes
 a release `x86_64-desktop-DATE-COMMIT-ATTEMPT` with
-`roguix-x86_64-desktop.nar.zst`, `publish.txt`, `vps-fetch.txt` and
-`nonguix-only.txt` (items only nonguix serves: exported, since the VPS
-substitutes only from bordeaux). `scripts/desktop-split` fails the run on
+`roguix-x86_64-desktop.nar.zst`, `publish.txt`, `vps-fetch.txt` and,
+unless empty, `nonguix-only.txt` (items only nonguix serves: exported,
+since the VPS substitutes only from bordeaux). `scripts/desktop-split` fails the run on
 any unfree item in the closure, on Broadcom's `wl` (its licence does not
 allow distributing it built) and on per-machine items. The VPS imports it
 with `scripts/vps-import -p x86_64-desktop`.

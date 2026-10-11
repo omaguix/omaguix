@@ -118,8 +118,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # GitHub rejects empty assets; nonguix-only.txt is empty when
+          # nonguix serves nothing alone, the rest must not be.
+          files=(roguix-x86_64-desktop.nar.zst split/publish.txt split/vps-fetch.txt outputs.txt)
+          for f in "${files[@]}"; do
+            [ -s "$f" ] || { echo "release: $f is missing or empty" >&2; exit 1; }
+          done
+          if [ -s split/nonguix-only.txt ]; then files+=(split/nonguix-only.txt); fi
           tag="x86_64-desktop-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
           gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
             --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA with channels-desktop.scm and try-roguix $TRY_ROGUIX_COMMIT." \
-            roguix-x86_64-desktop.nar.zst split/publish.txt split/vps-fetch.txt \
-            split/nonguix-only.txt outputs.txt
+            "${files[@]}"
