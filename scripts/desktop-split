@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Split the Roguix desktop's closure for roguix.frolow.dev, in
+# .github/workflows/build-x86_64-desktop.yml.  Only reads public narinfo URLs.
+#
+#   scripts/desktop-split DIR
+#
+# DIR holds:
+#   closure.txt   `guix gc -R` of the built outputs
+#   licenses.txt  "PATH NAME LICENCE,..." (scripts/desktop-licenses.scm)
+# and receives:
+#   closure-status.txt  bordeaux and nonguix narinfo status per item
+#   vps-fetch.txt       items bordeaux serves: the VPS substitutes them
+#   publish.txt         the rest, exported: the VPS cannot fetch them
+#   nonguix-only.txt    the part of publish.txt only nonguix serves
+#
+# It fails, publishing nothing, when a server gives no clear answer, when
+# the closure holds an unfree item (nonguix's licences are named "Nonfree";
+# a licence Guix cannot name counts too) or the Broadcom wl module, whose
+# licence does not allow distributing it built, or when an item to publish
+# looks per-machine (keys, host names, password hashes).
+set -euo pipefail
+dir=$(cd "${1:?usage: scripts/desktop-split DIR}" && pwd)
+
+narinfo_status() {
+  local hash
+  hash=$(basename "$1" | cut -d- -f1)
+  printf '%s %s %s\n' \
+    "$(curl -s -o /dev/null -w '%{http_code}' "https://bordeaux.guix.gnu.org/$hash.narinfo")" \
+    "$(curl -s -o /dev/null -w '%{http_code}' "https://substitutes.nonguix.org/$hash.narinfo")" \
+    "$1"
+}
+export -f narinfo_status
+xargs -P 16 -I{} bash -c 'narinfo_status "$1"' _ {} \
+  < "$dir/closure.txt" | sort -k3 > "$dir/closure-status.txt"
+if [ "$(wc -l < "$dir/closure-status.txt")" -ne "$(wc -l < "$dir/closure.txt")" ]; then
+  echo "desktop-split: some narinfo checks did not finish" >&2
+  exit 1
+fi
+if awk '$1$2 !~ /^(200|404)(200|404)$/ { bad = 1 } END { exit !bad }' \
+  "$dir/closure-status.txt"; then
+  echo "desktop-split: a server gave no clear answer:" >&2
+  awk '$1$2 !~ /^(200|404)(200|404)$/' "$dir/closure-status.txt" >&2
+  exit 1
+fi
+
+fail=0
+unfree=$(awk '$3 ~ /Nonfree|unknown/ { print $1 }' "$dir/licenses.txt" |
+  grep -xF -f - "$dir/closure.txt" || true)
+if [ -n "$unfree" ]; then
+  echo "desktop-split: unfree items in the closure:" >&2
+  printf '%s\n' "$unfree" >&2
+  fail=1
+fi
+while read -r item; do
+  name=$(basename "$item" | cut -d- -f2-)
+  if [[ $name =~ broadcom-sta|(^|-)wl($|-) ]]; then
+    echo "desktop-split: Broadcom wl in the closure: $item" >&2
+    fail=1
+  fi
+done < "$dir/closure.txt"
+
+awk '$1 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/vps-fetch.txt"
+awk '$1 != 200 { print $3 }' "$dir/closure-status.txt" > "$dir/publish.txt"
+awk '$1 != 200 && $2 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/nonguix-only.txt"
+
+# The package closure should hold no per-machine items; they are matched
+# by name in case it does.
+per_machine='-(system|etc|profile|boot|initrd|grub\.cfg|grub-image\.png|activate|activate-service\.scm|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*)$'
+while read -r item; do
+  name=$(basename "$item" | cut -d- -f2-)
+  if [[ -$name =~ $per_machine ]]; then
+    echo "desktop-split: per-machine item to publish: $item" >&2
+    fail=1
+  fi
+done < "$dir/publish.txt"
+[ "$fail" = 0 ] || exit 1
+
+echo "publish: $(wc -l < "$dir/publish.txt")" \
+  "(only nonguix serves $(wc -l < "$dir/nonguix-only.txt")), VPS fetches: $(wc -l < "$dir/vps-fetch.txt")"

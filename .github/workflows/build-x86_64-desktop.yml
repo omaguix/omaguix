@@ -1,0 +1,126 @@
+# Build manifests/x86_64-desktop.scm, the Roguix desktop's packages, with
+# the Guix of channels-desktop.scm and try-roguix's Roguix modules at
+# TRY_ROGUIX_COMMIT, and publish, as a release, the store items bordeaux
+# does not serve, signed with the builder key (modules/roguix/builder.pub),
+# for roguix.frolow.dev to import (scripts/vps-import -p x86_64-desktop).
+# The server's feed, build-x86_64.yml, has its own pin and release.
+name: build-x86_64-desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - channels-desktop.scm
+      - manifests/x86_64-desktop.scm
+      - scripts/desktop-licenses.scm
+      - scripts/desktop-split
+      - keys/**
+      - .github/workflows/build-x86_64-desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-x86_64-desktop
+  cancel-in-progress: false
+
+env:
+  # try-roguix's guest/guix/modules at this commit are the Roguix modules
+  # the MacBook's desktop runs (export of 2026-10-11).  rofrol/roguix-channel
+  # is generated from them but lags (its main is try-roguix 24f8c67, without
+  # ttfx or the cursor theme); a public commit pinned by its full hash
+  # gives the same store paths.  Move it with the manifest's package list.
+  TRY_ROGUIX_COMMIT: ea244ed82bc4dc35baddf67d82a50291545c76b9
+  # roguix.frolow.dev serves what the MacBook exported (or an earlier run
+  # published) for this pin, so only new items are built here.
+  SUBSTITUTE_URLS: >-
+    https://bordeaux.guix.gnu.org https://substitutes.nonguix.org
+    https://roguix.frolow.dev
+
+# Explicit bash runs with pipefail: `guix build | tee` fails with guix.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: rofrol/try-roguix
+          ref: ${{ env.TRY_ROGUIX_COMMIT }}
+          path: try-roguix
+          sparse-checkout: guest/guix/modules
+          persist-credentials: false
+
+      # The modules name the Guix commit they are written for.
+      - name: Check the pins
+        run: |
+          modules=$(cat try-roguix/guest/guix/modules/roguix/guix-commit)
+          grep -q "(commit \"$modules\")" channels-desktop.scm ||
+            { echo "channels-desktop.scm is not on Guix $modules"; exit 1; }
+
+      - uses: PromyLOPh/guix-install-action@40615e98e5c16a451aec10fe01c214ed07cbaa77 # v1.6
+        with:
+          pullAfterInstall: false
+
+      - name: Trust nonguix and roguix.frolow.dev substitutes
+        run: |
+          guix=$(command -v guix)
+          sudo "$guix" archive --authorize < keys/substitutes.nonguix.org.pub
+          sudo "$guix" archive --authorize \
+            < try-roguix/guest/guix/modules/roguix/roguix.frolow.dev.pub
+
+      - name: Get the Guix of channels-desktop.scm
+        run: |
+          guix time-machine -C channels-desktop.scm \
+            --substitute-urls="$SUBSTITUTE_URLS" -- describe
+
+      - name: Build
+        run: |
+          guix time-machine -C channels-desktop.scm -- \
+            build --no-grafts --substitute-urls="$SUBSTITUTE_URLS" \
+            -L try-roguix/guest/guix/modules -m manifests/x86_64-desktop.scm |
+            tee outputs.txt
+
+      # Grafts are not substitutable (guix/grafts.scm), so the VPS grafts
+      # locally; only ungrafted items are published.  scripts/desktop-split
+      # fails on unfree items and Broadcom's wl.
+      - name: Split the closure
+        run: |
+          mkdir split
+          guix time-machine -C channels-desktop.scm -- \
+            repl -L try-roguix/guest/guix/modules -- \
+            scripts/desktop-licenses.scm manifests/x86_64-desktop.scm > split/licenses.txt
+          guix gc -R $(cat outputs.txt) | sort -u > split/closure.txt
+          scripts/desktop-split split
+          wc -l split/*.txt
+
+      - name: Export
+        if: github.ref == 'refs/heads/main'
+        env:
+          BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
+        run: |
+          test -s split/publish.txt || { echo "bordeaux serves everything"; exit 1; }
+          sudo install -m 600 /dev/null /etc/guix/signing-key.sec
+          printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
+          sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
+          guix archive --export $(cat split/publish.txt) | zstd -T0 -12 > roguix-x86_64-desktop.nar.zst
+          sudo rm /etc/guix/signing-key.sec
+          ls -l roguix-x86_64-desktop.nar.zst
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="x86_64-desktop-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA with channels-desktop.scm and try-roguix $TRY_ROGUIX_COMMIT." \
+            roguix-x86_64-desktop.nar.zst split/publish.txt split/vps-fetch.txt \
+            split/nonguix-only.txt outputs.txt

@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
-# Run as root on roguix.frolow.dev: import the newest build-x86_64 release,
+# Run as root on roguix.frolow.dev: import the newest release of a feed,
 # so guix publish serves it.  The archive is signed with the builder key,
 # modules/roguix/builder.pub, which the host must authorize;
 # guix archive --import rejects anything else.
 #
-#   scripts/vps-import [TAG]
+#   scripts/vps-import [-p PREFIX] [TAG]
+#
+# PREFIX names the feed: x86_64 (the default) is the server's
+# (build-x86_64.yml, channels.scm), x86_64-desktop the Roguix desktop's
+# (build-x86_64-desktop.yml, channels-desktop.scm).  A TAG names its feed
+# itself: PREFIX-DATE-COMMIT-ATTEMPT.
 set -euo pipefail
 repo=roguixos/roguix
-tag=${1:-$(curl -sf "https://api.github.com/repos/$repo/releases?per_page=20" |
-  grep -o '"tag_name": *"x86_64-[^"]*"' | head -1 | cut -d'"' -f4)}
+prefix=
+if [ "${1:-}" = -p ]; then
+  prefix=${2:?usage: scripts/vps-import [-p PREFIX] [TAG]}
+  shift 2
+fi
+if [ -n "${1:-}" ]; then
+  tag=$1
+  prefix=${prefix:-${tag%-*-*-*}}
+else
+  prefix=${prefix:-x86_64}
+  # A date follows the prefix, so x86_64 does not match x86_64-desktop.
+  tag=$(curl -sf "https://api.github.com/repos/$repo/releases?per_page=100" |
+    grep -o "\"tag_name\": *\"$prefix-[0-9][^\"]*\"" | head -1 | cut -d'"' -f4)
+  [ -n "$tag" ] || { echo "vps-import: no $prefix release" >&2; exit 1; }
+fi
+archive=roguix-$prefix.nar.zst
 dir=/var/cache/roguix-import/$tag
 mkdir -p "$dir"
 cd "$dir"
-for f in roguix-x86_64.nar.zst publish.txt vps-fetch.txt; do
+for f in "$archive" publish.txt vps-fetch.txt; do
   [ -s "$f" ] || curl -sfL -o "$f" "https://github.com/$repo/releases/download/$tag/$f"
 done
 
@@ -22,7 +41,7 @@ if [ -s vps-fetch.txt ]; then
   nice -n 19 ionice -c3 guix build \
     --substitute-urls=https://bordeaux.guix.gnu.org $(cat vps-fetch.txt) > /dev/null
 fi
-zstd -dc roguix-x86_64.nar.zst | nice -n 19 ionice -c3 guix archive --import
+zstd -dc "$archive" | nice -n 19 ionice -c3 guix archive --import
 
 # Bake guix publish's cache one item at a time, so no client request
 # starts compressing (it once hung this host).
