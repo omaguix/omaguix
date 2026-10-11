@@ -27,7 +27,7 @@ concurrency:
 
 env:
   # try-roguix's guest/guix/modules at this commit are the Roguix modules
-  # the MacBook's desktop runs (export of 2026-10-11).  rofrol/roguix-channel
+  # the MacBook's desktop runs (export of 2026-10-11).  roguixos/roguix-channel
   # is generated from them but lags (its main is try-roguix 24f8c67, without
   # ttfx or the cursor theme); a public commit pinned by its full hash
   # gives the same store paths.  Move it with the manifest's package list.
@@ -52,7 +52,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: rofrol/try-roguix
+          repository: roguixos/try-roguix
           ref: ${{ env.TRY_ROGUIX_COMMIT }}
           path: try-roguix
           sparse-checkout: guest/guix/modules

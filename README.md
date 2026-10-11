@@ -7,8 +7,8 @@ publishes the store items no other server has, for
 | Repository | What it is |
 | --- | --- |
 | [roguixos/roguix](https://github.com/roguixos/roguix) | this one: the desktop feed's CI |
-| [rofrol/try-roguix](https://github.com/rofrol/try-roguix) | the macOS app and the Roguix desktop guest |
-| [rofrol/roguix-channel](https://github.com/rofrol/roguix-channel) | the desktop's channel, generated from try-roguix |
+| [roguixos/try-roguix](https://github.com/roguixos/try-roguix) | the macOS app and the Roguix desktop guest |
+| [roguixos/roguix-channel](https://github.com/roguixos/roguix-channel) | the desktop's channel, generated from try-roguix |
 
 ## Layout
 
@@ -43,8 +43,8 @@ The desktop (try-roguix's Roguix modules) runs Guix 7e74121a with nonguix
 c0192e90 (`channels-desktop.scm`); every store path depends on that pin.
 On a push to `main` touching its files,
 `.github/workflows/build-x86_64-desktop.yml` checks out
-[rofrol/try-roguix](https://github.com/rofrol/try-roguix) at the commit it
-pins (`TRY_ROGUIX_COMMIT`; rofrol/roguix-channel lags behind it), builds
+[roguixos/try-roguix](https://github.com/roguixos/try-roguix) at the commit it
+pins (`TRY_ROGUIX_COMMIT`; roguixos/roguix-channel lags behind it), builds
 the 16 packages of `manifests/x86_64-desktop.scm` without grafts (grafts
 are not substitutable; the VPS grafts locally) and makes a release
 `x86_64-desktop-DATE-COMMIT-ATTEMPT` with:
