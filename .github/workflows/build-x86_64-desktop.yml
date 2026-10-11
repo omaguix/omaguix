@@ -1,8 +1,9 @@
 # Build manifests/x86_64-desktop.scm, the Roguix desktop's packages, with
 # the Guix of channels-desktop.scm and try-roguix's Roguix modules at
-# TRY_ROGUIX_COMMIT, and publish, as a release, the store items bordeaux
-# does not serve, signed with the builder key (modules/roguix/builder.pub),
-# for roguix.frolow.dev to import (scripts/vps-import -p x86_64-desktop).
+# TRY_ROGUIX_COMMIT, and publish, as a release, the store items neither
+# bordeaux nor roguix.frolow.dev serves (no release when there are none),
+# signed with the builder key (modules/roguix/builder.pub), for
+# roguix.frolow.dev to import (scripts/vps-import -p x86_64-desktop).
 # The server's feed, build-x86_64.yml, has its own pin and release.
 name: build-x86_64-desktop
 
@@ -105,7 +106,10 @@ jobs:
         env:
           BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
         run: |
-          test -s split/publish.txt || { echo "bordeaux serves everything"; exit 1; }
+          if [ ! -s split/publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve everything: no export"
+            exit 0
+          fi
           sudo install -m 600 /dev/null /etc/guix/signing-key.sec
           printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
           sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
@@ -118,13 +122,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -s split/publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve everything: no release"
+            exit 0
+          fi
           # GitHub rejects empty assets; nonguix-only.txt is empty when
-          # nonguix serves nothing alone, the rest must not be.
+          # nonguix serves nothing alone and vps-has.txt when
+          # roguix.frolow.dev serves nothing new, the rest must not be.
           files=(roguix-x86_64-desktop.nar.zst split/publish.txt split/vps-fetch.txt outputs.txt)
           for f in "${files[@]}"; do
             [ -s "$f" ] || { echo "release: $f is missing or empty" >&2; exit 1; }
           done
-          if [ -s split/nonguix-only.txt ]; then files+=(split/nonguix-only.txt); fi
+          for f in split/nonguix-only.txt split/vps-has.txt; do
+            if [ -s "$f" ]; then files+=("$f"); fi
+          done
           tag="x86_64-desktop-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
           gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
             --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA with channels-desktop.scm and try-roguix $TRY_ROGUIX_COMMIT." \

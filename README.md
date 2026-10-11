@@ -52,9 +52,16 @@ release `x86_64-DATE-COMMIT-ATTEMPT` with:
 
 - `roguix-x86_64.nar.zst`: `guix archive --export` of `publish.txt`,
   signed with the builder key;
-- `publish.txt`: the closure's items bordeaux does not serve;
-- `vps-fetch.txt`: the rest, which the VPS substitutes from bordeaux,
-  since an import needs every reference valid.
+- `publish.txt`: the closure's items neither bordeaux nor
+  roguix.frolow.dev serves;
+- `vps-fetch.txt`: the items bordeaux serves, which the VPS substitutes
+  from there, since an import needs every reference valid;
+- `vps-has.txt`, unless empty: the items roguix.frolow.dev already
+  serves, so the VPS has them and they are not exported again.
+
+A run whose closure both servers serve entirely makes no release and
+passes; its log says so. A server answering a narinfo request with
+anything but 200 or 404 fails the run.
 
 The VPS pulls it with `scripts/vps-import`; CI has no access to the VPS.
 The importing daemon must trust the builder key
@@ -77,8 +84,10 @@ pins (`TRY_ROGUIX_COMMIT`; rofrol/roguix-channel lags behind it), builds
 the 16 packages of `manifests/x86_64-desktop.scm` without grafts, and makes
 a release `x86_64-desktop-DATE-COMMIT-ATTEMPT` with
 `roguix-x86_64-desktop.nar.zst`, `publish.txt`, `vps-fetch.txt` and,
-unless empty, `nonguix-only.txt` (items only nonguix serves: exported,
-since the VPS substitutes only from bordeaux). `scripts/desktop-split` fails the run on
+unless empty, `vps-has.txt` and `nonguix-only.txt` (items only nonguix
+serves: exported, since the VPS substitutes only from bordeaux), or, like
+the server's feed, no release when bordeaux and roguix.frolow.dev serve
+everything. `scripts/desktop-split` fails the run on
 any unfree item in the closure, on Broadcom's `wl` (its licence does not
 allow distributing it built) and on per-machine items. The VPS imports it
 with `scripts/vps-import -p x86_64-desktop`.

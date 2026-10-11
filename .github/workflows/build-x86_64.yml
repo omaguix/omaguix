@@ -1,5 +1,6 @@
 # Build manifests/x86_64.scm with the Guix of channels.scm and publish, as a
-# release, the store items bordeaux does not serve, signed with the builder
+# release, the store items neither bordeaux nor roguix.frolow.dev serves
+# (no release when there are none), signed with the builder
 # key (modules/roguix/builder.pub), for roguix.frolow.dev to import
 # (scripts/vps-import).
 name: build-x86_64
@@ -46,28 +47,51 @@ jobs:
 
       # Grafts are not substitutable (guix/grafts.scm), so the VPS grafts
       # locally; only ungrafted items are published.  Items bordeaux serves
-      # the VPS substitutes from there before importing (vps-fetch.txt).
+      # the VPS substitutes from there before importing (vps-fetch.txt);
+      # items roguix.frolow.dev serves it already has (vps-has.txt).  It is
+      # asked only about the rest: its guix publish starts compressing any
+      # item it holds but has not baked.  A status other than 200 or 404
+      # fails the run.
       - name: Split the closure
         run: |
           guix gc -R $(cat outputs.txt) | sort -u > closure.txt
           : > publish.txt
           : > vps-fetch.txt
+          : > vps-has.txt
+          narinfo() {
+            local code
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$1/$hash.narinfo")
+            case $code in
+              200|404) echo "$code" ;;
+              *) echo "$1 answered $code for $item" >&2; return 1 ;;
+            esac
+          }
+          # Assignments, so a failed narinfo fails the step.
           while read -r item; do
             hash=$(basename "$item" | cut -d- -f1)
-            if curl -sfI -o /dev/null "https://bordeaux.guix.gnu.org/$hash.narinfo"; then
+            code=$(narinfo https://bordeaux.guix.gnu.org)
+            if [ "$code" = 200 ]; then
               echo "$item" >> vps-fetch.txt
+              continue
+            fi
+            code=$(narinfo https://roguix.frolow.dev)
+            if [ "$code" = 200 ]; then
+              echo "$item" >> vps-has.txt
             else
               echo "$item" >> publish.txt
             fi
           done < closure.txt
-          wc -l closure.txt publish.txt vps-fetch.txt
+          wc -l closure.txt publish.txt vps-fetch.txt vps-has.txt
 
       - name: Export
         if: github.ref == 'refs/heads/main'
         env:
           BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
         run: |
-          test -s publish.txt || { echo "bordeaux serves everything"; exit 1; }
+          if [ ! -s publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve everything: no export"
+            exit 0
+          fi
           sudo install -m 600 /dev/null /etc/guix/signing-key.sec
           printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
           sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
@@ -80,7 +104,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -s publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve everything: no release"
+            exit 0
+          fi
+          # GitHub rejects empty assets.
+          files=(roguix-x86_64.nar.zst publish.txt vps-fetch.txt outputs.txt)
+          if [ -s vps-has.txt ]; then files+=(vps-has.txt); fi
           tag="x86_64-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
           gh release create "$tag" --target "$GITHUB_SHA" \
             --title "$tag" --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA." \
-            roguix-x86_64.nar.zst publish.txt vps-fetch.txt outputs.txt
+            "${files[@]}"
