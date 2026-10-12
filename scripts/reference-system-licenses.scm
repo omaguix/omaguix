@@ -16,8 +16,12 @@
 
 ;; Observe package lowering while evaluating the entire operating system.
 ;; Merely inspecting operating-system-packages misses service dependencies.
+;; Derivation inputs have no inverse mapping to their original package objects
+;; (including service-local variants), so retain this lowering hook.  Guix's
+;; package record type is private; resolve it explicitly at the pinned API.
 ;; Delegate unchanged to Guix's native/cross package lowering procedures.
-(define-gexp-compiler (license-package-compiler (package <package>) system target)
+(define-gexp-compiler
+  (license-package-compiler (package (@@ (guix packages) <package>)) system target)
   (set! packages (cons package packages))
   (if target
       (package->cross-derivation package target system)
