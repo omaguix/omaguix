@@ -30,7 +30,7 @@ permissions:
 
 env:
   SUBSTITUTE_URLS: >-
-    https://bordeaux.guix.gnu.org https://roguix.frolow.dev
+    https://bordeaux.guix.gnu.org https://substitutes.roguix.org
 
 defaults:
   run:
@@ -113,11 +113,11 @@ jobs:
           echo "ROGUIX_MODULES=$GITHUB_WORKSPACE/roguix-channel/modules" >> "$GITHUB_ENV"
 
       # ci-install-guix authorizes bordeaux's key from the binary tarball.
-      - name: Trust roguix.frolow.dev substitutes
+      - name: Trust substitutes.roguix.org substitutes
         run: |
           guix=$(command -v guix)
           # shellcheck disable=SC2024 # The public key is readable by the runner.
-          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/roguix.frolow.dev.pub"
+          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/substitutes.roguix.org.pub"
 
       - name: Get the reference system's Guix
         run: |
@@ -154,7 +154,7 @@ jobs:
           BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
         run: |
           if [ ! -s split/publish.txt ]; then
-            echo "bordeaux and roguix.frolow.dev serve all package items: no export"
+            echo "bordeaux and substitutes.roguix.org serve all package items: no export"
             exit 0
           fi
           # Remove the secret even if export fails.
@@ -272,7 +272,7 @@ jobs:
             exit 0
           fi
           echo "has-export=true" >> "$GITHUB_OUTPUT"
-          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/roguix.frolow.dev.pub"
+          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/substitutes.roguix.org.pub"
           # shellcheck disable=SC2024 # Both public keys are runner-readable.
           sudo "$(command -v guix)" archive --authorize < "$key"
           # shellcheck disable=SC2024
@@ -300,7 +300,7 @@ jobs:
           SUBSTITUTE_SIGNING_KEY: ${{ secrets.SUBSTITUTE_SIGNING_KEY }}
         run: |
           scripts/static-substitutes bake --split input/split --output static-release \
-            --key roguix-channel/modules/roguix/roguix.frolow.dev.pub \
+            --key roguix-channel/modules/roguix/substitutes.roguix.org.pub \
             --tag "$RELEASE_TAG" --workflow-commit "$GITHUB_SHA"
 
       - name: Release the verified tree and compatibility archive

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run as root on roguix.frolow.dev: import the newest release of a feed,
+# Run as root on substitutes.roguix.org: import the newest release of a feed,
 # so guix publish serves it.  The archive is signed with the builder key,
 # modules/roguix/builder.pub, which the host must authorize;
 # guix archive --import rejects anything else.

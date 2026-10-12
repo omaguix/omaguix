@@ -2,10 +2,13 @@
 
 ## Context
 
-Owner decision `d-zuer37ri`: move the existing VM-trusted publish key from the
-mixed-use VPS into a GitHub environment secret via a trusted machine. Keep
-`https://roguix.frolow.dev` and its public key; no VM/image changes, new endpoint,
-fresh key or legacy tree. Today CI exports with the builder key; VPS re-signs.
+Owner decisions of 2026-10-12: CI signs substitutes for
+`https://substitutes.roguix.org` with a **fresh** key generated off the VPS (on
+the owner's Guix machine) and held only in environment secret
+`SUBSTITUTE_SIGNING_KEY`. The old `roguix.frolow.dev` key is erased from the VPS
+and GitHub. The public key is `modules/roguix/substitutes.roguix.org.pub` in
+roguix-channel; try-roguix adds it. Until then the workflow does not run
+(pushes use `[skip ci]`).
 
 Protocol verified at Guix pin `7e74121a40a8308166e328a23647cf6f3768e6c8`:
 - [guix/scripts/publish.scm](https://github.com/guix-mirror/guix/blob/7e74121a40a8308166e328a23647cf6f3768e6c8/guix/scripts/publish.scm): `%nix-cache-info`, `narinfo-string`, `signed-string`, `bake-narinfo+nar`.
@@ -48,7 +51,7 @@ Before exposing the production key, install pinned Guix, authorize
 Roguix, and `guix archive --import` the builder-signed export into the fresh
 runner store. This works across architectures; do not execute imported code.
 Only the signing step receives environment secret `SUBSTITUTE_SIGNING_KEY`.
-Write it mode 0600, confirm its public half equals the existing guest key,
+Write it mode 0600, confirm its public half equals `substitutes.roguix.org.pub`,
 and run pinned `guix publish` bound to localhost with explicit key files,
 `--cache`, `--cache-bypass-threshold=0`, and `--compression=gzip:3`.
 For every `publish.txt` item request its narinfo, waiting with a bounded poll
@@ -61,36 +64,34 @@ signature stripping or custom signer.
 
 Verification parses narinfos, computes SHA256 of the exact pre-signature bytes
 with required signed fields present, and uses `signature-case` against an ACL
-containing **only the VM-trusted key**; accept only `valid-signature`.
+containing **only the substitutes.roguix.org key**; accept only `valid-signature`.
 Do not use `valid-narinfo?` as the verification interface. Decompress each NAR
 and compare its SHA256 and byte count with `NarHash`/`NarSize`.
 Release the tree tarball and manifest/checksums; partition below 2 GiB per asset.
 Record workflow/channel commits, pin, architecture and the **full** Roguix set
 needed (including reused `vps-has.txt` items), not just the exported delta.
 
-### VPS delivery, transition and retention
+### VPS delivery, cutover and retention
 
 The VPS continues pulling releases; CI needs no SSH credentials. Safely extract
 into staging (reject traversal, links and special files), verify signatures,
 hashes and manifests, and merge into `/var/lib/roguix-substitutes` under a lock.
-Install NARs before narinfos with atomic renames. Nginx serves the same root:
-`/nix-cache-info`, `/<hash>.narinfo`, and the advertised `/nar/...` paths.
-During transition, missing static narinfos **and NARs** fall back to local
-publish on 8181. No dynamic HTTP compression, directory listing or uploads.
+Install NARs before narinfos with atomic renames. The VPS serves that root
+statically as `https://substitutes.roguix.org` (nginx: `/nix-cache-info`,
+`/<hash>.narinfo`, the advertised `/nar/...` paths; roguix-vps owns the serving
+side). No dynamic HTTP compression, directory listing, uploads or `guix publish`
+fallback.
 
-Before removing the VPS key, inventory/bake currently served items with its
-publish and mirror exact narinfos/all NAR URLs into the same tree, including
-older/manual feeds. Verify coverage and clean-store downloads on both
-architectures with the existing VM ACL; stop publish, remove fallback, erase
-the key from VPS/backups and transfer-machine temporary storage. VMs retain
-the same endpoint/key throughout.
+Cutover is clean: guests trust only the new key, with no dual-key release.
+There is no backfill: once `substitutes.roguix.org` serves, `roguix.frolow.dev`
+is switched off and nothing it served is carried over.
 
 Keep items referenced by the latest **N releases per architecture**; union full
 manifests, delete the rest. Measure unique NAR sizes, reference coverage, staging
 peak and OS/site headroom on the 48 GB VPS before choosing/recording N and budget.
 Keep advertised URL variants. Stop pulls if staging cannot fit; remove redundant
 download/store/cache copies only after verification. Older VMs may need builds
-after pruning; backfilled items follow this policy, not eternal retention.
+after pruning.
 
 ### Repository changes and order
 
@@ -99,24 +100,25 @@ after pruning; backfilled items follow this policy, not eternal retention.
    update `scripts/vps-import` for static releases and retention manifests, and
    README/tests. Keep existing imports working until static delivery is tested.
 2. **Owner:** remove required reviewers; configure main-only branch deployments,
-   no tags; then transfer the existing key via a trusted machine into the secret.
+   no tags; then store the fresh key in the secret.
    These are repository settings, not enforced by YAML alone.
 3. **roguix-vps:** advance its gitlink/`scripts/mac/vps-install-import`; manage
-   pulls, static directory, retention and nginx fallback in live Debian config
-   and `modules/roguix-vps/system.scm`. Backfill, verify, stop publish, remove
-   fallback, erase key/backups. Preserve TLS/personal-site vhosts.
-4. **try-roguix:** unchanged, including images and the existing public key.
+   pulls, static directory, retention and nginx in live Debian config
+   and `modules/roguix-vps/system.scm`. Serve statically, switch off
+   `roguix.frolow.dev`, erase the old key/backups. Preserve TLS/personal-site vhosts.
+4. **try-roguix:** adds `substitutes.roguix.org.pub` and the new endpoint.
 
 ## Alternatives
 
-VPS signing retains mixed-host risk; fresh keys require guest trust rollout.
-The owner chose continuity. Custom/private-procedure signers add complexity.
+VPS signing retains mixed-host risk. Moving the existing key to a secret under
+`roguix.frolow.dev` with a backfill (earlier choice) was superseded by a fresh
+key and endpoint. Custom/private-procedure signers add complexity.
 
 ## Consequences
 
-Earlier theft remains valid: **Guix has no key revocation**. Moving/deleting the
-key cannot invalidate stolen copies; replacement would require VM trust updates.
-Post-removal VPS compromise can deny/replay downloads, not newly steal the key.
+Earlier theft remains valid: **Guix has no key revocation**. The old key is
+erased, not revoked; guests stop trusting it.
+VPS compromise can deny/replay downloads, not newly steal the key.
 Anyone who can push to main or change its workflow, or a stolen owner session/
 token, can get code signed. There is no human release gate. GitHub/runner
 compromise and bad builder output remain risks. In an organization-owned repo,

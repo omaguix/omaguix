@@ -2,7 +2,7 @@
 
 CI for the Roguix desktop's packages: GitHub Actions builds the reference
 system for aarch64 and x86_64 and publishes the package store items no
-other configured server has, for `https://roguix.frolow.dev` to serve.
+other configured server has, for `https://substitutes.roguix.org` to serve.
 
 | Repository | What it is |
 | --- | --- |
@@ -76,12 +76,12 @@ guix git authenticate --keyring=origin/keyring --end="$CHANNEL_COMMIT" \
 Authentication failure stops the job. The channel's `.guix-channel` selects
 `modules`; the jobs read `modules/roguix/guix-commit` (currently
 `7e74121a40a8308166e328a23647cf6f3768e6c8`) and authorize
-`modules/roguix/roguix.frolow.dev.pub` from that authenticated checkout.
+`modules/roguix/substitutes.roguix.org.pub` from that authenticated checkout.
 They build the channel-defined `(@ (roguix system) %roguix-reference-system)`
 with `ROGUIX_MODULES` set to the checkout's absolute `modules` path, the
 matrix's `--system` and `--no-grafts`. This is the entire reference system
 with default host settings and no extra packages, not a machine's
-hand-written list. Only bordeaux and roguix.frolow.dev are configured
+hand-written list. Only bordeaux and substitutes.roguix.org are configured
 substitute servers.
 
 New `x86_64-desktop` releases now come from this reference system, including
@@ -96,7 +96,7 @@ lists that are in that closure, and splits their `guix gc -R` closure, so
 the files generated for the one reference system (system, etc, udev rules,
 pam.d, shepherd services and similar) are left out unless a package output
 references them: bordeaux items go to `vps-fetch.txt`, items already
-served by roguix.frolow.dev go to `vps-has.txt`, and the rest to
+served by substitutes.roguix.org go to `vps-has.txt`, and the rest to
 `publish.txt`. Narinfo answers must be 200 or 404; licence and Broadcom
 `wl` checks cover `publish.txt`. The licence collector uses the matrix's
 `GUIX_SYSTEM` and observes package lowering throughout the system,
@@ -134,9 +134,10 @@ in this organization-owned repository that literal check blocks human manual
 dispatch. Do not silently broaden it to organization members.
 These environment settings must be applied on GitHub; YAML cannot set them.
 
-Move the existing VPS key through a trusted machine into environment secret
-`SUBSTITUTE_SIGNING_KEY`, after configuring the policy. Guests and the HTTPS
-endpoint remain unchanged. Earlier theft remains valid (Guix has no revocation).
+Generate a fresh key off the VPS (on the owner's Guix machine) and store it
+only in environment secret `SUBSTITUTE_SIGNING_KEY`, after configuring the
+policy. Its public half is `modules/roguix/substitutes.roguix.org.pub` in the
+channel; guests trust only that key. Earlier theft remains valid (Guix has no revocation).
 Anyone able to push main/change its workflow, or a stolen owner session/token,
 can get code signed; there is no human release gate.
 
@@ -166,7 +167,7 @@ required. Guix supplies decompression, including the VPS's existing zstd format.
 ```sh
 scripts/vps-import --static-dir /var/lib/roguix-substitutes \
   --key /etc/guix/signing-key.pub -p x86_64-desktop
-# Optional pruning, only after measuring space and completing the backfill:
+# Optional pruning, only after measuring space:
 scripts/vps-import --static-dir /var/lib/roguix-substitutes \
   --key /etc/guix/signing-key.pub --keep "$MEASURED_N"
 scripts/static-tree install --release downloaded-release \
@@ -177,11 +178,11 @@ The installer verifies checksums and all incoming narinfos/NARs before moving
 NARs, then narinfos. State/lock live in `.roguix/`; nginx must deny hidden paths.
 Without `--keep`, nothing is deleted. With N, pull the latest N release deltas
 per architecture, retain their full-set union and all existing URL variants,
-and verify reused/backfilled items before deleting anything. Missing items
+and verify reused items before deleting anything. Missing items
 block pruning: this is not a historical snapshot recovery service. Local
 `install --keep N` uses installed manifests. Measure the 48 GB VPS's staging
 peak and OS/site headroom before choosing N; older clients may need builds.
-Nginx fallback, backfill and removing publish/the VPS key belong to roguix-vps.
+Nginx serving belongs to roguix-vps.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
@@ -218,7 +219,7 @@ reconfigure), elsewhere with `guix archive --authorize`.
 
 The builder key signs what the VPS imports and republishes under its own
 key, which Roguix VMs trust: keep `BUILDER_SIGNING_KEY` to workflows on
-`main`. Once roguix.frolow.dev serves an earlier export for the same pin,
+`main`. Once substitutes.roguix.org serves an earlier export for the same pin,
 the jobs can substitute those items instead of rebuilding them. The protected
-job also signs static substitutes directly with the existing VM-trusted key;
+job also signs static substitutes directly with the fresh substitutes.roguix.org key;
 only its signing step receives that key.
