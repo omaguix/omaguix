@@ -1,0 +1,124 @@
+# Build the channel's complete reference system, not a machine's package list.
+# Export only package closure items no configured substitute server serves.
+name: build-aarch64-desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/ci-install-guix
+      - scripts/desktop-split
+      - scripts/reference-system-licenses.scm
+      - modules/roguix/builder.pub
+      - .github/workflows/build-aarch64-desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-aarch64-desktop
+  cancel-in-progress: false
+
+env:
+  TRY_ROGUIX_COMMIT: 85f1fdc56b75a0bb72e14b3579f86bc90c483401
+  SUBSTITUTE_URLS: >-
+    https://bordeaux.guix.gnu.org https://roguix.frolow.dev
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: roguixos/try-roguix
+          ref: ${{ env.TRY_ROGUIX_COMMIT }}
+          path: try-roguix
+          sparse-checkout: guest/guix/modules
+          persist-credentials: false
+
+      - name: Read the reference system's Guix pin
+        run: |
+          commit=$(cat try-roguix/guest/guix/modules/roguix/guix-commit)
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid Guix pin"; exit 1; }
+          echo "GUIX_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "ROGUIX_MODULES=$GITHUB_WORKSPACE/try-roguix/guest/guix/modules" >> "$GITHUB_ENV"
+
+      - name: Install Guix
+        run: scripts/ci-install-guix
+
+      # ci-install-guix authorizes bordeaux's key from the binary tarball.
+      - name: Trust roguix.frolow.dev substitutes
+        run: |
+          guix=$(command -v guix)
+          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/roguix.frolow.dev.pub"
+
+      - name: Get the reference system's Guix
+        run: |
+          guix time-machine --commit="$GUIX_COMMIT" \
+            --substitute-urls="$SUBSTITUTE_URLS" -- describe
+
+      - name: Build
+        run: |
+          guix time-machine --commit="$GUIX_COMMIT" -- \
+            system build --no-grafts --system=aarch64-linux \
+            --substitute-urls="$SUBSTITUTE_URLS" -L "$ROGUIX_MODULES" \
+            -e '(@ (roguix system) %roguix-reference-system)' | tee outputs.txt
+
+      # Grafts are not substitutable. Keep package inputs, but omit the
+      # generated system/profile/activation outputs (patterns in the splitter).
+      - name: Split the closure
+        run: |
+          mkdir split
+          guix time-machine --commit="$GUIX_COMMIT" -- \
+            repl -L "$ROGUIX_MODULES" -- scripts/reference-system-licenses.scm > split/licenses.txt
+          guix gc -R $(cat outputs.txt) | sort -u > split/closure.txt
+          scripts/desktop-split --reference-system split
+          wc -l split/*.txt
+
+      - name: Export
+        if: github.ref == 'refs/heads/main'
+        env:
+          BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
+        run: |
+          if [ ! -s split/publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve all package items: no export"
+            exit 0
+          fi
+          # Remove the secret even if export fails.
+          trap 'sudo rm -f /etc/guix/signing-key.sec' EXIT
+          sudo install -m 600 /dev/null /etc/guix/signing-key.sec
+          printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
+          sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
+          guix archive --export $(cat split/publish.txt) | zstd -T0 -12 > roguix-aarch64-desktop.nar.zst
+          ls -l roguix-aarch64-desktop.nar.zst
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -s split/publish.txt ]; then
+            echo "bordeaux and roguix.frolow.dev serve all package items: no release"
+            exit 0
+          fi
+          files=(roguix-aarch64-desktop.nar.zst split/publish.txt outputs.txt)
+          for f in "${files[@]}"; do
+            [ -s "$f" ] || { echo "release: $f is missing or empty" >&2; exit 1; }
+          done
+          # GitHub rejects empty assets; the importer accepts an absent
+          # vps-fetch.txt as an empty set for this feed.
+          for f in split/vps-fetch.txt split/vps-has.txt; do
+            if [ -s "$f" ]; then files+=("$f"); fi
+          done
+          tag="aarch64-desktop-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
+            --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA: reference system of try-roguix $TRY_ROGUIX_COMMIT, Guix $GUIX_COMMIT, aarch64-linux, no grafts." \
+            "${files[@]}"

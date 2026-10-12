@@ -6,9 +6,10 @@
 #
 #   scripts/vps-import [-p PREFIX] [TAG]
 #
-# PREFIX names the feed: x86_64-desktop (the default and the only one
-# left) is the Roguix desktop's (build-x86_64-desktop.yml,
-# channels-desktop.scm).  A TAG names its feed itself:
+# PREFIX names the feed: x86_64-desktop (default, channels-desktop.scm)
+# or aarch64-desktop (try-roguix's reference system). Archive import and
+# substitution of explicit store paths work across architectures.
+# A TAG names its feed itself:
 # PREFIX-DATE-COMMIT-ATTEMPT.
 set -euo pipefail
 repo=roguixos/roguix
@@ -32,15 +33,33 @@ archive=roguix-$prefix.nar.zst
 dir=/var/cache/roguix-import/$tag
 mkdir -p "$dir"
 cd "$dir"
-for f in "$archive" publish.txt vps-fetch.txt; do
+for f in "$archive" publish.txt; do
   [ -s "$f" ] || curl -sfL -o "$f" "https://github.com/$repo/releases/download/$tag/$f"
 done
+if [ "$prefix" = aarch64-desktop ]; then
+  # GitHub cannot attach an empty asset. Only this feed permits an absent
+  # vps-fetch.txt, meaning no bordeaux items; other HTTP errors still fail.
+  if [ ! -f vps-fetch.txt ]; then
+    code=$(curl -sSL -o vps-fetch.txt.tmp -w '%{http_code}' \
+      "https://github.com/$repo/releases/download/$tag/vps-fetch.txt")
+    case "$code" in
+      200) mv vps-fetch.txt.tmp vps-fetch.txt ;;
+      404) rm vps-fetch.txt.tmp; : > vps-fetch.txt ;;
+      *) echo "vps-import: vps-fetch.txt HTTP $code" >&2; exit 1 ;;
+    esac
+  fi
+else
+  [ -s vps-fetch.txt ] || curl -sfL -o vps-fetch.txt \
+    "https://github.com/$repo/releases/download/$tag/vps-fetch.txt"
+fi
 
 # guix archive --import needs every reference valid: take those from
 # bordeaux first.
 if [ -s vps-fetch.txt ]; then
+  fetch=()
+  while read -r item; do fetch+=("$item"); done < vps-fetch.txt
   nice -n 19 ionice -c3 guix build \
-    --substitute-urls=https://bordeaux.guix.gnu.org $(cat vps-fetch.txt) > /dev/null
+    --substitute-urls=https://bordeaux.guix.gnu.org "${fetch[@]}" > /dev/null
 fi
 zstd -dc "$archive" | nice -n 19 ionice -c3 guix archive --import
 
@@ -51,7 +70,7 @@ while read -r item; do
   for _ in $(seq 360); do
     code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8181/$hash.narinfo")
     [ "$code" = 200 ] && break
-    sleep 5
+    sleep 5 # delay: poll until guix publish serves the baked item's narinfo
   done
   [ "$code" = 200 ] || echo "not baked: $item ($code)"
 done < publish.txt

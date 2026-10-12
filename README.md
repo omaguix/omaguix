@@ -16,7 +16,9 @@ publishes the store items no other server has, for
 | --- | --- |
 | `channels-desktop.scm` | the Roguix desktop's Guix and nonguix commits |
 | `manifests/x86_64-desktop.scm` | what CI builds for the Roguix desktop on x86_64 |
-| `scripts/desktop-licenses.scm`, `scripts/desktop-split` | the job's licence check and closure split |
+| `.github/workflows/build-aarch64-desktop.yml` | builds try-roguix's reference system on a native ARM runner |
+| `scripts/reference-system-licenses.scm` | licences of the reference system's packages, including service dependencies |
+| `scripts/desktop-licenses.scm`, `scripts/desktop-split` | the x86_64 licence check and shared closure split |
 | `scripts/ci-install-guix` | installs Guix on the runner |
 | `modules/roguix/builder.pub` | CI's archive signing key; the secret half is the `BUILDER_SIGNING_KEY` Actions secret |
 | `keys/substitutes.nonguix.org.pub` | nonguix's substitute key |
@@ -27,17 +29,59 @@ try-roguix.
 
 ## Guix on the runners
 
-The workflow installs Guix with `scripts/ci-install-guix`: the Guix
-1.5.0 binary tarball from `ftpmirror.gnu.org`, or, if that fails, the copy
-in this repository's `guix-binary-1.5.0` release, checked against the
-sha256 pinned in the script, with a root guix-daemon and bordeaux's and
-ci's keys authorized; it never runs `guix pull` (the job uses
-`guix time-machine`). To update: verify the new tarball's `.sig` from
-`ftp.gnu.org` with `gpg --verify` against the release signing key, change
-`VERSION` and `SHA256` in the script, and upload the tarball to a release
-`guix-binary-VERSION` here.
+The workflows install Guix with `scripts/ci-install-guix`: the Guix
+1.5.0 binary tarball selected by `uname -m` (`x86_64` or `aarch64`; other
+architectures fail), from `ftpmirror.gnu.org`, or, if that fails, the copy
+in this repository's `guix-binary-1.5.0` release. Each architecture has a
+pinned sha256, verified with Efraim Flashner's release signing key
+`A28BF40C3E551372662D14F741AAE7DCCA3D8351`. The script starts a root
+guix-daemon and authorizes bordeaux's and ci's keys; it never runs
+`guix pull` (the jobs use `guix time-machine`). To update: verify both new
+tarballs' `.sig` files from `ftp.gnu.org` with `gpg --verify` against the
+release signing key, change `VERSION` and both `SHA256` values in the
+script, and upload both tarballs to a release `guix-binary-VERSION` here.
 
-## The Roguix desktop's feed
+## The aarch64 reference-system feed
+
+Roguix users run Apple Silicon VM guests. On a push to `main` touching its
+own inputs, or `workflow_dispatch`, `build-aarch64-desktop.yml` runs on
+GitHub's native `ubuntu-24.04-arm` runner with a 350-minute limit. It checks
+out [try-roguix at 85f1fdc56b75a0bb72e14b3579f86bc90c483401](https://github.com/roguixos/try-roguix/commit/85f1fdc56b75a0bb72e14b3579f86bc90c483401),
+reads `guest/guix/modules/roguix/guix-commit` (currently
+`7e74121a40a8308166e328a23647cf6f3768e6c8`), and builds the channel-defined
+`(@ (roguix system) %roguix-reference-system)` with an absolute module load
+path, `--system=aarch64-linux` and `--no-grafts`. This is the entire
+reference system with default host settings and no extra packages, not a
+machine's hand-written list. No nonguix channel, key or server is used.
+
+The job trusts and substitutes from bordeaux and roguix.frolow.dev. It
+computes the closure with `guix gc -R` and reuses `scripts/desktop-split
+--reference-system`: bordeaux items go to `vps-fetch.txt`, items already
+served by roguix.frolow.dev go to `vps-has.txt`, and the rest to
+`publish.txt`. The splitter logs generated system outputs it drops in
+`dropped-system.txt`; its comment lists the name patterns (system, etc,
+boot, activation/shepherd files, system profile and similar). Package
+inputs remain in the closure. Narinfo answers must be 200 or 404; licence
+and Broadcom `wl` checks still cover the original closure. The licence
+collector observes package lowering throughout the system, including
+services, and checks their package closures, not just the system profile.
+
+On `main`, nonempty `publish.txt` is exported and signed with
+`BUILDER_SIGNING_KEY` as `roguix-aarch64-desktop.nar.zst`, then released as
+`aarch64-desktop-DATE-COMMIT-ATTEMPT` with `publish.txt`, `outputs.txt` and
+nonempty `vps-fetch.txt`/`vps-has.txt`. No release is made when no package
+items need publishing. Grafts are not substitutable, so only ungrafted
+items are published, as in the x86_64 job.
+
+On the x86_64 VPS, run `scripts/vps-import -p aarch64-desktop` (or give an
+explicit release tag). It accepts an absent `vps-fetch.txt` as an empty
+set for this feed. `guix archive --import` and bordeaux substitution by
+explicit store path do not depend on the host architecture; the importer
+does not execute the aarch64 binaries. No contradictory architecture
+restriction was found in this import path; the coordinator's CI/import
+run remains the real end-to-end test.
+
+## The existing x86_64 desktop feed
 
 The desktop (try-roguix's Roguix modules) runs Guix 7e74121a with nonguix
 c0192e90 (`channels-desktop.scm`); every store path depends on that pin.

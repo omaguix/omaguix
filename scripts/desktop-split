@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # Split the Roguix desktop's closure for roguix.frolow.dev, in
-# .github/workflows/build-x86_64-desktop.yml.  Only reads public narinfo URLs.
+# the desktop workflows.  Only reads public narinfo URLs.
 #
-#   scripts/desktop-split DIR
+#   scripts/desktop-split [--reference-system] DIR
+#
+# --reference-system skips nonguix and drops generated system items rather
+# than rejecting them.  The default x86_64 package-feed behavior is unchanged.
 #
 # DIR holds:
 #   closure.txt   `guix gc -R` of the built outputs
-#   licenses.txt  "PATH NAME LICENCE,..." (scripts/desktop-licenses.scm)
+#   licenses.txt  "PATH NAME LICENCE,..." (the feed's licence collector)
 # and receives:
 #   closure-status.txt  bordeaux, nonguix and roguix.frolow.dev narinfo
-#                       status per item ("-": not asked, bordeaux serves it)
+#                       status per item ("-": not asked; nonguix is disabled
+#                       in reference-system mode)
 #   vps-fetch.txt       items bordeaux serves: the VPS substitutes them
 #   vps-has.txt         items roguix.frolow.dev already serves: not exported
 #   publish.txt         the rest, exported: the VPS has nowhere to fetch them
@@ -21,31 +25,68 @@
 # licence does not allow distributing it built, or when an item to publish
 # looks per-machine (keys, host names, password hashes).
 set -euo pipefail
-dir=$(cd "${1:?usage: scripts/desktop-split DIR}" && pwd)
+reference_system=0
+if [ "${1:-}" = --reference-system ]; then
+  reference_system=1
+  shift
+fi
+export reference_system
+dir=$(cd "${1:?usage: scripts/desktop-split [--reference-system] DIR}" && pwd)
+closure=$dir/closure.txt
+if [ "$reference_system" = 1 ]; then
+  # Drop generated system outputs, not versioned package outputs: system,
+  # etc, profile, boot, initrd, kernel (the system's module profile),
+  # grub.cfg/grub-image.png, activate/activate.scm/activate-service.scm,
+  # shepherd*.scm/go/conf, linux-module-database, account/authorization
+  # files, profile.d/bashrc.d, firmware (the system union), modprobe/rc,
+  # provenance/channels.scm/configuration.scm/parameters, os-release,
+  # login.defs/issue/nsswitch.conf/hostname/timezone, and Roguix's generated
+  # config.scm/vconsole.conf/roguix-sources.
+  # These describe this one reference system and are not package substitutes.
+  generated='^(system|etc|profile|boot|initrd|kernel|grub\.cfg|grub-image\.png|activate(\.scm|-service\.scm)?|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*|profile\.d|bashrc\.d|firmware|modprobe|rc|provenance|channels\.scm|configuration\.scm|parameters|os-release|login\.defs|issue|nsswitch\.conf|hostname|timezone|config\.scm|vconsole\.conf|roguix-sources)$'
+  closure=$dir/package-closure.txt
+  : > "$closure"
+  : > "$dir/dropped-system.txt"
+  while read -r item; do
+    name=$(basename "$item" | cut -d- -f2-)
+    if [[ $name =~ $generated ]]; then
+      printf '%s\n' "$item" >> "$dir/dropped-system.txt"
+    else
+      printf '%s\n' "$item" >> "$closure"
+    fi
+  done < "$dir/closure.txt"
+  echo "desktop-split: dropped generated system items:"
+  cat "$dir/dropped-system.txt"
+fi
 
 # roguix.frolow.dev is asked only about items bordeaux does not serve: its
 # guix publish starts compressing any item it holds but has not baked.
 narinfo_status() {
-  local hash bordeaux vps=-
+  local hash bordeaux vps=- nonguix=-
   hash=$(basename "$1" | cut -d- -f1)
   bordeaux=$(curl -s -o /dev/null -w '%{http_code}' "https://bordeaux.guix.gnu.org/$hash.narinfo")
   if [ "$bordeaux" != 200 ]; then
     vps=$(curl -s -o /dev/null -w '%{http_code}' "https://roguix.frolow.dev/$hash.narinfo")
   fi
-  printf '%s %s %s %s\n' "$bordeaux" \
-    "$(curl -s -o /dev/null -w '%{http_code}' "https://substitutes.nonguix.org/$hash.narinfo")" \
-    "$vps" "$1"
+  if [ "$reference_system" = 0 ]; then
+    nonguix=$(curl -s -o /dev/null -w '%{http_code}' "https://substitutes.nonguix.org/$hash.narinfo")
+  fi
+  printf '%s %s %s %s\n' "$bordeaux" "$nonguix" "$vps" "$1"
 }
 export -f narinfo_status
 # shellcheck disable=SC2016 # $1 is the inner bash's
 xargs -P 16 -I{} bash -c 'narinfo_status "$1"' _ {} \
-  < "$dir/closure.txt" | sort -k4 > "$dir/closure-status.txt"
-if [ "$(wc -l < "$dir/closure-status.txt")" -ne "$(wc -l < "$dir/closure.txt")" ]; then
+  < "$closure" | sort -k4 > "$dir/closure-status.txt"
+if [ "$(wc -l < "$dir/closure-status.txt")" -ne "$(wc -l < "$closure")" ]; then
   echo "desktop-split: some narinfo checks did not finish" >&2
   exit 1
 fi
-unclear=$(awk '$1$2$3 !~ /^200(200|404)-$|^404(200|404)(200|404)$/' \
-  "$dir/closure-status.txt")
+if [ "$reference_system" = 1 ]; then
+  unclear=$(awk '$1$2$3 !~ /^200--$|^404-(200|404)$/' "$dir/closure-status.txt")
+else
+  unclear=$(awk '$1$2$3 !~ /^200(200|404)-$|^404(200|404)(200|404)$/' \
+    "$dir/closure-status.txt")
+fi
 if [ -n "$unclear" ]; then
   echo "desktop-split: a server gave no clear answer:" >&2
   printf '%s\n' "$unclear" >&2
@@ -85,6 +126,11 @@ while read -r item; do
 done < "$dir/publish.txt"
 [ "$fail" = 0 ] || exit 1
 
-echo "publish: $(wc -l < "$dir/publish.txt")" \
-  "(only nonguix serves $(wc -l < "$dir/nonguix-only.txt")), VPS fetches: $(wc -l < "$dir/vps-fetch.txt")," \
-  "VPS has: $(wc -l < "$dir/vps-has.txt")"
+if [ "$reference_system" = 1 ]; then
+  echo "publish: $(wc -l < "$dir/publish.txt")," \
+    "VPS fetches: $(wc -l < "$dir/vps-fetch.txt"), VPS has: $(wc -l < "$dir/vps-has.txt")"
+else
+  echo "publish: $(wc -l < "$dir/publish.txt")" \
+    "(only nonguix serves $(wc -l < "$dir/nonguix-only.txt")), VPS fetches: $(wc -l < "$dir/vps-fetch.txt")," \
+    "VPS has: $(wc -l < "$dir/vps-has.txt")"
+fi

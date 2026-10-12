@@ -4,15 +4,20 @@
 # pullAfterInstall: false, but from a pinned release instead of
 # ci.guix.gnu.org's latest nightly.  Run as the runner user; it uses sudo.
 #
-# To move to another release: change VERSION and SHA256 (the sha256 of the
-# tarball, taken only after `gpg --verify` of its .sig from ftp.gnu.org
-# printed "Good signature"), and upload the tarball as an asset of a
+# To move to another release: change VERSION and both SHA256 values (each
+# taken only after `gpg --verify` of its .sig from ftp.gnu.org printed
+# "Good signature"), and upload both tarballs as assets of a
 # release guix-binary-VERSION of roguixos/roguix (the fallback below).
 set -euo pipefail
 
 VERSION=1.5.0
-SHA256=aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817
-TARBALL=guix-binary-$VERSION.x86_64-linux.tar.xz
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) SHA256=aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817 ;;
+  aarch64) SHA256=a5d58b1d0294cad6adb1f2aff627d37feb5db763fdffbceb8551f2b12123cf39 ;;
+  *) echo "ci-install-guix: unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+TARBALL=guix-binary-$VERSION.$ARCH-linux.tar.xz
 URLS=(
   "https://ftpmirror.gnu.org/gnu/guix/$TARBALL"
   "https://github.com/roguixos/roguix/releases/download/guix-binary-$VERSION/$TARBALL"
