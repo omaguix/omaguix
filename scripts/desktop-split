@@ -24,15 +24,16 @@
 set -euo pipefail
 dir=$(cd "${1:?usage: scripts/desktop-split DIR}" && pwd)
 # Drop generated system outputs, not versioned package outputs: system,
-# etc, profile, boot, initrd, kernel (the system's module profile),
+# etc, profile, boot, initrd/raw-initrd, kernel (the system's module profile),
 # grub.cfg/grub-image.png, activate/activate.scm/activate-service.scm,
 # shepherd*.scm/go/conf, linux-module-database, account/authorization
 # files, profile.d/bashrc.d, firmware (the system union), modprobe/rc,
 # provenance/channels.scm/configuration.scm/parameters, os-release,
 # login.defs/issue/nsswitch.conf/hostname/timezone, and Roguix's generated
-# config.scm/vconsole.conf/roguix-sources.
+# config.scm/vconsole.conf/roguix-sources, and try-roguix's
+# roguix-first-boot program.
 # These describe this one reference system and are not package substitutes.
-generated='^(system|etc|profile|boot|initrd|kernel|grub\.cfg|grub-image\.png|activate(\.scm|-service\.scm)?|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*|profile\.d|bashrc\.d|firmware|modprobe|rc|provenance|channels\.scm|configuration\.scm|parameters|os-release|login\.defs|issue|nsswitch\.conf|hostname|timezone|config\.scm|vconsole\.conf|roguix-sources)$'
+generated='^(system|etc|profile|boot|initrd|raw-initrd|kernel|grub\.cfg|grub-image\.png|activate(\.scm|-service\.scm)?|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*|profile\.d|bashrc\.d|firmware|modprobe|rc|provenance|channels\.scm|configuration\.scm|parameters|os-release|login\.defs|issue|nsswitch\.conf|hostname|timezone|config\.scm|vconsole\.conf|roguix-sources|roguix-first-boot)$'
 closure=$dir/package-closure.txt
 : > "$closure"
 : > "$dir/dropped-system.txt"
@@ -83,7 +84,8 @@ if [ -n "$unfree" ]; then
 fi
 while read -r item; do
   name=$(basename "$item" | cut -d- -f2-)
-  if [[ $name =~ broadcom-sta|(^|-)wl($|-) ]]; then
+  # The package wl (wl-6.30.223.271), not wl-clipboard or other wl-* tools.
+  if [[ $name =~ broadcom-sta|^wl(-[0-9]|$) ]]; then
     echo "desktop-split: Broadcom wl in the closure: $item" >&2
     fail=1
   fi
