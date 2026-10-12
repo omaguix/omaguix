@@ -1,52 +1,47 @@
 #!/usr/bin/env bash
-# Split the Roguix desktop's closure for roguix.frolow.dev, in
-# the reference-system workflow. Only reads public narinfo URLs.
+# Split the Roguix desktop's package closure for roguix.frolow.dev, in
+# the reference-system workflow. Only reads public narinfo URLs and the
+# local store.
 #
 #   scripts/desktop-split DIR
 #
-# Drops generated system items while retaining package inputs.
+# Publishes package outputs and their closure, not the files generated for
+# the one reference system (system, etc, udev rules, pam.d, shepherd
+# services, ...), which no other machine requests.
 #
 # DIR holds:
 #   closure.txt   `guix gc -R` of the built outputs
-#   licenses.txt  "PATH NAME LICENCE,..." (the feed's licence collector)
+#   licenses.txt  "PATH NAME LICENCE,..." (the feed's licence collector):
+#                 every package output the reference system lowers
 # and receives:
-#   closure-status.txt  bordeaux and roguix.frolow.dev narinfo
-#                       status per item ("-": not asked)
-#   vps-fetch.txt       items bordeaux serves: the VPS substitutes them
-#   vps-has.txt         items roguix.frolow.dev already serves: not exported
-#   publish.txt         the rest, exported: the VPS has nowhere to fetch them
+#   packages.txt         licenses.txt's paths that are in closure.txt
+#   package-closure.txt  `guix gc -R` of packages.txt: what is split
+#   closure-status.txt   bordeaux and roguix.frolow.dev narinfo
+#                        status per item ("-": not asked)
+#   vps-fetch.txt        items bordeaux serves: the VPS substitutes them
+#   vps-has.txt          items roguix.frolow.dev already serves: not exported
+#   publish.txt          the rest, exported: the VPS has nowhere to fetch them
 #
 # It fails, publishing nothing, when a server gives no clear answer, when
-# the closure holds an unfree item ("Nonfree" or a licence Guix cannot name)
-# or the Broadcom wl module, whose licence does not allow distributing it
-# built, or when an item to publish
-# looks per-machine (keys, host names, password hashes).
+# an item to publish is unfree ("Nonfree" or a licence Guix cannot name) or
+# the Broadcom wl module, whose licence does not allow distributing it
+# built, when an item to publish that is no package output looks
+# per-machine (keys, host names, password hashes), or when an item to
+# publish references a store path in none of the three lists.
 set -euo pipefail
 dir=$(cd "${1:?usage: scripts/desktop-split DIR}" && pwd)
-# Drop generated system outputs, not versioned package outputs: system,
-# etc, profile, boot, initrd/raw-initrd, kernel (the system's module profile),
-# grub.cfg/grub-image.png, activate/activate.scm/activate-service.scm,
-# shepherd*.scm/go/conf, linux-module-database, account/authorization
-# files, profile.d/bashrc.d, firmware (the system union), modprobe/rc,
-# provenance/channels.scm/configuration.scm/parameters, os-release,
-# login.defs/issue/nsswitch.conf/hostname/timezone, and Roguix's generated
-# config.scm/vconsole.conf/roguix-sources, and try-roguix's
-# roguix-first-boot program.
-# These describe this one reference system and are not package substitutes.
-generated='^(system|etc|profile|boot|initrd|raw-initrd|kernel|grub\.cfg|grub-image\.png|activate(\.scm|-service\.scm)?|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*|profile\.d|bashrc\.d|firmware|modprobe|rc|provenance|channels\.scm|configuration\.scm|parameters|os-release|login\.defs|issue|nsswitch\.conf|hostname|timezone|config\.scm|vconsole\.conf|roguix-sources|roguix-first-boot)$'
+
+awk '{ print $1 }' "$dir/licenses.txt" | sort -u |
+  comm -12 - <(sort -u "$dir/closure.txt") > "$dir/packages.txt"
+if [ ! -s "$dir/packages.txt" ]; then
+  echo "desktop-split: no package output of licenses.txt is in closure.txt" >&2
+  exit 1
+fi
 closure=$dir/package-closure.txt
-: > "$closure"
-: > "$dir/dropped-system.txt"
-while read -r item; do
-  name=$(basename "$item" | cut -d- -f2-)
-  if [[ $name =~ $generated ]]; then
-    printf '%s\n' "$item" >> "$dir/dropped-system.txt"
-  else
-    printf '%s\n' "$item" >> "$closure"
-  fi
-done < "$dir/closure.txt"
-echo "desktop-split: dropped generated system items:"
-cat "$dir/dropped-system.txt"
+xargs guix gc -R < "$dir/packages.txt" | sort -u > "$closure"
+echo "desktop-split: $(wc -l < "$dir/packages.txt") package outputs," \
+  "$(wc -l < "$closure") items in their closure," \
+  "$(sort -u "$dir/closure.txt" | comm -23 - "$closure" | wc -l) system items left out"
 
 # roguix.frolow.dev is asked only about items bordeaux does not serve: its
 # guix publish starts compressing any item it holds but has not baked.
@@ -74,37 +69,47 @@ if [ -n "$unclear" ]; then
   exit 1
 fi
 
-fail=0
-unfree=$(awk '$3 ~ /Nonfree|unknown/ { print $1 }' "$dir/licenses.txt" |
-  grep -xF -f - "$dir/closure.txt" || true)
-if [ -n "$unfree" ]; then
-  echo "desktop-split: unfree items in the closure:" >&2
-  printf '%s\n' "$unfree" >&2
-  fail=1
-fi
-while read -r item; do
-  name=$(basename "$item" | cut -d- -f2-)
-  # The package wl (wl-6.30.223.271), not wl-clipboard or other wl-* tools.
-  if [[ $name =~ broadcom-sta|^wl(-[0-9]|$) ]]; then
-    echo "desktop-split: Broadcom wl in the closure: $item" >&2
-    fail=1
-  fi
-done < "$dir/closure.txt"
-
 awk '$1 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/vps-fetch.txt"
 awk '$1 != 200 && $2 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/vps-has.txt"
 awk '$1 != 200 && $2 != 200 { print $3 }' "$dir/closure-status.txt" > "$dir/publish.txt"
 
-# The package closure should hold no per-machine items; they are matched
-# by name in case it does.
+fail=0
+unfree=$(awk '$3 ~ /Nonfree|unknown/ { print $1 }' "$dir/licenses.txt" |
+  grep -xF -f - "$dir/publish.txt" || true)
+if [ -n "$unfree" ]; then
+  echo "desktop-split: unfree items to publish:" >&2
+  printf '%s\n' "$unfree" >&2
+  fail=1
+fi
+# Package outputs are versioned and never match; this catches a generated
+# per-machine file that a package output references.
 per_machine='-(system|etc|profile|boot|initrd|grub\.cfg|grub-image\.png|activate|activate-service\.scm|shepherd(-[a-z0-9.-]+)?\.(scm|go)|shepherd\.conf|linux-module-database|sudoers|passwd|shadow|group|hosts|ssh-authorized-keys|authorized_keys|acl|signing-key[a-z.]*|wpa_supplicant[a-z.-]*)$'
 while read -r item; do
   name=$(basename "$item" | cut -d- -f2-)
-  if [[ -$name =~ $per_machine ]]; then
+  # The package wl (wl-6.30.223.271), not wl-clipboard or other wl-* tools.
+  if [[ $name =~ broadcom-sta|^wl(-[0-9]|$) ]]; then
+    echo "desktop-split: Broadcom wl to publish: $item" >&2
+    fail=1
+  fi
+  if [[ -$name =~ $per_machine ]] && ! grep -qxF "$item" "$dir/packages.txt"; then
     echo "desktop-split: per-machine item to publish: $item" >&2
     fail=1
   fi
 done < "$dir/publish.txt"
+[ "$fail" = 0 ] || exit 1
+
+# The VPS imports publish.txt and must find every reference of it in the
+# archive, in its store or on bordeaux.
+sort -u "$dir/publish.txt" "$dir/vps-fetch.txt" "$dir/vps-has.txt" > "$dir/known.txt"
+while read -r item; do
+  missing=$(guix gc --references "$item" < /dev/null | sort -u | comm -23 - "$dir/known.txt")
+  if [ -n "$missing" ]; then
+    echo "desktop-split: $item references items in no list:" >&2
+    printf '%s\n' "$missing" >&2
+    fail=1
+  fi
+done < "$dir/publish.txt"
+rm "$dir/known.txt"
 [ "$fail" = 0 ] || exit 1
 
 echo "publish: $(wc -l < "$dir/publish.txt")," \

@@ -16,7 +16,7 @@ other configured server has, for `https://roguix.frolow.dev` to serve.
 | --- | --- |
 | `.github/workflows/build-desktop.yml` | builds try-roguix's reference system on native ARM and x86_64 runners |
 | `scripts/reference-system-licenses.scm` | licences of the reference system's packages, including service dependencies; requires `GUIX_SYSTEM` from the caller |
-| `scripts/desktop-split` | checks licences and splits the reference system's closure |
+| `scripts/desktop-split` | checks licences and splits the closure of the reference system's package outputs |
 | `scripts/ci-install-guix` | installs Guix on the runner |
 | `modules/roguix/builder.pub` | CI's archive signing key; the secret half is the `BUILDER_SIGNING_KEY` Actions secret |
 | `scripts/vps-import` | on the VPS: import CI's newest release into guix publish |
@@ -68,18 +68,21 @@ MacBooks. Earlier releases under the same prefix came from a hand-written
 package list; they remain historical releases, not reference-system builds.
 The `aarch64-desktop` feed serves Apple Silicon VM guests.
 
-Each job computes the closure with `guix gc -R` and runs
-`scripts/desktop-split`: bordeaux items go to `vps-fetch.txt`, items already
+Each job computes the system's closure with `guix gc -R` and runs
+`scripts/desktop-split`. It takes the package outputs the licence collector
+lists that are in that closure, and splits their `guix gc -R` closure, so
+the files generated for the one reference system (system, etc, udev rules,
+pam.d, shepherd services and similar) are left out unless a package output
+references them: bordeaux items go to `vps-fetch.txt`, items already
 served by roguix.frolow.dev go to `vps-has.txt`, and the rest to
-`publish.txt`. The splitter logs generated system outputs it drops in
-`dropped-system.txt`; its comment lists the name patterns (system, etc,
-boot, activation/shepherd files, system profile and similar). Package
-inputs remain in the closure. Narinfo answers must be 200 or 404; licence
-and Broadcom `wl` checks cover the original closure. The licence collector
-uses the matrix's `GUIX_SYSTEM` and observes package lowering throughout
-the system, including services, and checks their package closures, not
-just the system profile. The splitter fails on unfree or unknown licences,
-Broadcom `wl`, ambiguous server answers, or per-machine items to publish.
+`publish.txt`. Narinfo answers must be 200 or 404; licence and Broadcom
+`wl` checks cover `publish.txt`. The licence collector uses the matrix's
+`GUIX_SYSTEM` and observes package lowering throughout the system,
+including services, and checks their package closures, not just the system
+profile. The splitter fails on unfree or unknown licences, Broadcom `wl`,
+ambiguous server answers, per-machine items to publish that are no package
+output, or an item to publish with a reference (`guix gc --references`) in
+none of the three lists, which the VPS could not import.
 
 On `main`, nonempty `publish.txt` is exported and signed with
 `BUILDER_SIGNING_KEY` as `roguix-PREFIX.nar.zst`, then released as

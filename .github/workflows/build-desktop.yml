@@ -1,5 +1,6 @@
 # Build the channel's complete reference system, not a machine's package list.
-# Export only package closure items no configured substitute server serves.
+# Export only package outputs and their closure no configured substitute
+# server serves.
 name: build-desktop
 
 on:
@@ -84,8 +85,8 @@ jobs:
             --substitute-urls="$SUBSTITUTE_URLS" -L "$ROGUIX_MODULES" \
             -e '(@ (roguix system) %roguix-reference-system)' | tee outputs.txt
 
-      # Grafts are not substitutable. Keep package inputs, but omit the
-      # generated system/profile/activation outputs (patterns in the splitter).
+      # Grafts are not substitutable. Publish the package outputs the system
+      # lowers and their closure, not the files generated for this system.
       - name: Split the closure
         run: |
           mkdir split
