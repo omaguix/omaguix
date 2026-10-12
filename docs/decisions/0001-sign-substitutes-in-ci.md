@@ -34,9 +34,11 @@ there because guests use both servers. Ambiguous responses fail. Artifact lists:
 `publish.txt`, `vps-fetch.txt`, `vps-has.txt` and the full package closure.
 
 Add a separate signing job on a fresh runner with
-`environment: substitute-signing`, restricted to main. The solo owner is the
-required environment reviewer and approves each release themselves: deliberate
-per-release confirmation, **not independent review**. Do not prevent self-review.
+`environment: substitute-signing`. Owner amendment: sign automatically on main,
+with **no required reviewers and no per-release approval**. Its deployment branch
+policy permits only the `main` branch, not tags. The signing job also checks the
+main ref; manual `workflow_dispatch` signing requires
+`github.actor == github.repository_owner`. Push signing has no actor restriction.
 Checkout and artifact download actions are allowed, pinned to full commit SHAs.
 Use this run's export/lists and reviewed workflow/pin, not artifact scripts.
 Only this job gets `contents: write`; other token permissions stay minimal.
@@ -96,8 +98,9 @@ after pruning; backfilled items follow this policy, not eternal retention.
    and the protected signing job; add a small publish/mirror/verification helper,
    update `scripts/vps-import` for static releases and retention manifests, and
    README/tests. Keep existing imports working until static delivery is tested.
-2. **Owner:** transfer the existing key via a trusted machine into the secret;
-   configure main-only self-approval. Confirm protection is enforced by the plan.
+2. **Owner:** remove required reviewers; configure main-only branch deployments,
+   no tags; then transfer the existing key via a trusted machine into the secret.
+   These are repository settings, not enforced by YAML alone.
 3. **roguix-vps:** advance its gitlink/`scripts/mac/vps-install-import`; manage
    pulls, static directory, retention and nginx fallback in live Debian config
    and `modules/roguix-vps/system.scm`. Backfill, verify, stop publish, remove
@@ -114,7 +117,10 @@ The owner chose continuity. Custom/private-procedure signers add complexity.
 Earlier theft remains valid: **Guix has no key revocation**. Moving/deleting the
 key cannot invalidate stolen copies; replacement would require VM trust updates.
 Post-removal VPS compromise can deny/replay downloads, not newly steal the key.
-GitHub/runner compromise, bad builder output or approval mistakes can still sign
-malicious code. Hashes/signatures are not reproducible-build proof or freshness/
+Anyone who can push to main or change its workflow, or a stolen owner session/
+token, can get code signed. There is no human release gate. GitHub/runner
+compromise and bad builder output remain risks. In an organization-owned repo,
+the literal actor/owner comparison disables human manual signing; pushes still
+sign automatically. Hashes/signatures are not reproducible-build proof or freshness/
 availability guarantees. Bordeaux loss/pruning can force builds; personal-site
 security and channel signing are outside scope.

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Bake with Guix's CLI; static-tree handles only archives, delivery and retention.
+set -euo pipefail
+[[ ${1:-} == bake ]] || { echo 'usage: static-substitutes bake --split DIR --output DIR --key PUB --tag TAG --workflow-commit SHA' >&2; exit 1; }
+shift
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --split) split=${2:?}; shift 2 ;;
+    --output) output=${2:?}; shift 2 ;;
+    --key) key=${2:?}; shift 2 ;;
+    --tag) tag=${2:?}; shift 2 ;;
+    --workflow-commit) commit=${2:?}; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+pin=7e74121a40a8308166e328a23647cf6f3768e6c8
+[[ $(< "$split/guix-commit.txt") == "$pin" ]]
+: "${SUBSTITUTE_SIGNING_KEY:?missing environment signing secret}"
+tmp=$(mktemp -d)
+pid=
+cleanup() {
+  if [[ -n $pid ]]; then
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+umask 077
+printf '%s\n' "$SUBSTITUTE_SIGNING_KEY" > "$tmp/key.sec"
+unset SUBSTITUTE_SIGNING_KEY
+unset STATIC_TREE STATIC_NARINFO_LIST
+export STATIC_PUBLIC_KEY="$key" STATIC_SECRET_KEY="$tmp/key.sec"
+# Keep malformed-key diagnostics private; Guile backtraces may include key data.
+if ! guix time-machine --commit="$pin" -- repl -- "$here/verify-substitutes.scm" > "$tmp/key-check.log" 2>&1; then
+  echo 'Signing key does not match the authenticated guest key (or Guix failed).' >&2; exit 1
+fi
+unset STATIC_SECRET_KEY
+mkdir "$tmp/tree"
+# The child inherits its bound loopback listener through exec. Reading its port
+# pipe waits for that positive event (EOF on failure), not a startup sleep.
+exec 4< <(exec python3 "$here/static-tree" serve --key "$key" --secret "$tmp/key.sec" \
+  --cache "$tmp/cache" --log "$tmp/publish.log")
+pid=$!
+read -r port <&4
+exec 4<&-
+base="http://127.0.0.1:$port"
+curl -fsS --max-time 60 "$base/nix-cache-info" -o "$tmp/tree/nix-cache-info"
+while read -r item; do
+  hash=${item##*/}; hash=${hash%%-*}
+  baked=false
+  for _ in $(seq 1800); do
+    kill -0 "$pid" # A dead publisher cannot acknowledge a baked item.
+    code=$(curl -sS -D "$tmp/headers" -o "$tmp/info" -w '%{http_code}' "$base/$hash.narinfo")
+    case $code in
+      200) mv "$tmp/info" "$tmp/tree/$hash.narinfo"; baked=true; break ;;
+      404)
+        grep -qiE '^x-baking: 1[[:space:]]*$' "$tmp/headers" || { echo "Not in publisher store: $item" >&2; exit 1; }
+        sleep 1 ;; # External polling after publish acknowledges its cache worker is baking.
+      *) echo "narinfo HTTP $code: $item" >&2; exit 1 ;;
+    esac
+  done
+  "$baked" || { echo "publish did not finish baking: $item" >&2; exit 1; }
+done < "$split/publish.txt"
+find "$tmp/tree" -name '*.narinfo' -print > "$tmp/infos"
+export STATIC_NARINFO_LIST="$tmp/infos"
+# The one verifier authenticates metadata and returns safe item/URL mappings.
+guix time-machine --commit="$pin" -- repl -- "$here/verify-substitutes.scm" > "$tmp/urls"
+while IFS=$'\t' read -r _item file url; do
+  mkdir -p "$tmp/tree/$(dirname "$file")"
+  curl -fsS "$base/$url" -o "$tmp/tree/$file"
+done < "$tmp/urls"
+export STATIC_TREE="$tmp/tree"
+guix time-machine --commit="$pin" -- repl -- "$here/verify-substitutes.scm" > /dev/null
+kill -- "-$pid"; wait "$pid" || true; pid=
+rm "$tmp/key.sec"
+python3 "$here/static-tree" pack --tree "$tmp/tree" --split "$split" \
+  --output "$output" --tag "$tag" --workflow-commit "$commit"

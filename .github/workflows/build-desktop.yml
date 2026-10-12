@@ -11,6 +11,11 @@ on:
       - scripts/ci-install-guix
       - scripts/desktop-split
       - scripts/reference-system-licenses.scm
+      - scripts/static-substitutes
+      - scripts/static-tree
+      - scripts/verify-substitutes.scm
+      - scripts/vps-import
+      - tests/**
       - modules/roguix/builder.pub
       - .github/workflows/build-desktop.yml
   workflow_dispatch:
@@ -21,7 +26,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   SUBSTITUTE_URLS: >-
@@ -74,9 +79,11 @@ jobs:
       CHANNEL_COMMIT: ${{ needs.resolve-channel.outputs.commit }}
     timeout-minutes: 350
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: roguixos/roguix-channel
           ref: ${{ env.CHANNEL_COMMIT }}
@@ -109,6 +116,7 @@ jobs:
       - name: Trust roguix.frolow.dev substitutes
         run: |
           guix=$(command -v guix)
+          # shellcheck disable=SC2024 # The public key is readable by the runner.
           sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/roguix.frolow.dev.pub"
 
       - name: Get the reference system's Guix
@@ -135,6 +143,7 @@ jobs:
           : > split/release-tag.txt
           guix time-machine --commit="$GUIX_COMMIT" -- \
             repl -L "$ROGUIX_MODULES" -- scripts/reference-system-licenses.scm > split/licenses.txt
+          # shellcheck disable=SC2046 # Guix emits whitespace-free store path arguments.
           guix gc -R $(cat outputs.txt) | sort -u > split/closure.txt
           scripts/desktop-split split
           wc -l split/*.txt
@@ -153,38 +162,27 @@ jobs:
           sudo install -m 600 /dev/null /etc/guix/signing-key.sec
           printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
           sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
+          # shellcheck disable=SC2046 # desktop-split emits whitespace-free store paths.
           guix archive --export $(cat split/publish.txt) | zstd -T0 -12 > "roguix-$PREFIX.nar.zst"
           ls -l "roguix-$PREFIX.nar.zst"
 
-      - name: Release
+      - name: Upload signing input
         if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ ! -s split/publish.txt ]; then
-            echo "bordeaux and roguix.frolow.dev serve all package items: no release"
-            exit 0
-          fi
-          files=("roguix-$PREFIX.nar.zst" split/publish.txt outputs.txt)
-          for f in "${files[@]}"; do
-            [ -s "$f" ] || { echo "release: $f is missing or empty" >&2; exit 1; }
-          done
-          # GitHub rejects empty assets; the importer accepts an absent
-          # vps-fetch.txt as an empty set for either feed.
-          for f in split/vps-fetch.txt split/vps-has.txt; do
-            if [ -s "$f" ]; then files+=("$f"); fi
-          done
-          tag="$PREFIX-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
-            --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA: reference system of roguix-channel $CHANNEL_COMMIT, Guix $GUIX_COMMIT, $GUIX_SYSTEM, no grafts." \
-            "${files[@]}"
-          printf '%s\n' "$tag" > split/release-tag.txt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-${{ matrix.prefix }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            split/
+            outputs.txt
+            roguix-${{ matrix.prefix }}.nar.zst
 
       # A successful split produces all lists, even when publish.txt is empty.
-      # Preserve them if export or release fails, but never upload an incomplete split.
+      # Preserve them if export fails, but never upload an incomplete split.
       - name: Upload the split
         if: ${{ always() && steps.split.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: split-${{ matrix.prefix }}
           if-no-files-found: error
@@ -197,3 +195,128 @@ jobs:
             split/vps-fetch.txt
             split/vps-has.txt
             split/package-closure.txt
+
+  sign-substitutes:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner))
+    needs: [resolve-channel, build]
+    environment: substitute-signing
+    permissions:
+      contents: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        prefix: [x86_64-desktop, aarch64-desktop]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: sign-${{ matrix.prefix }}
+      cancel-in-progress: false
+    env:
+      PREFIX: ${{ matrix.prefix }}
+      CHANNEL_COMMIT: ${{ needs.resolve-channel.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: roguixos/roguix-channel
+          ref: ${{ env.CHANNEL_COMMIT }}
+          path: roguix-channel
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signing-${{ matrix.prefix }}
+          path: input
+
+      - name: Install Guix and authenticate the channel
+        run: |
+          scripts/ci-install-guix
+          git -C roguix-channel fetch origin refs/heads/keyring:refs/remotes/origin/keyring
+          guix="$GUIX_PATH/bin/guix"
+          (cd roguix-channel && "$guix" git authenticate --keyring=origin/keyring --end="$CHANNEL_COMMIT" \
+            bcc938512706d19de86dd8c6f50853fa80b063b8 \
+            '7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E')
+        env:
+          GUIX_PATH: /var/guix/profiles/per-user/root/current-guix
+
+      - name: Verify input and prepare the fresh signing store
+        id: prepare
+        run: |
+          pin=7e74121a40a8308166e328a23647cf6f3768e6c8
+          # Validate artifact lists before passing their paths to Guix commands.
+          for name in publish vps-has vps-fetch package-closure; do
+            if grep -qEv '^/gnu/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$' "input/split/$name.txt"; then
+              echo "Invalid store path in $name" >&2; exit 1
+            fi
+          done
+          diff -u <(sort -u input/split/{publish,vps-has,vps-fetch}.txt) \
+            <(sort -u input/split/package-closure.txt)
+          [[ $(< roguix-channel/modules/roguix/guix-commit) == "$pin" ]]
+          [[ $(< input/split/guix-commit.txt) == "$pin" ]]
+          [[ $(< input/split/channel-commit.txt) == "$CHANNEL_COMMIT" ]]
+          case $PREFIX in
+            x86_64-desktop) expected=x86_64-linux ;;
+            aarch64-desktop) expected=aarch64-linux ;;
+          esac
+          [[ $(< input/split/system.txt) == "$expected" ]]
+          if [[ ! -s input/split/publish.txt ]]; then
+            echo "has-export=false" >> "$GITHUB_OUTPUT"
+            echo "No new items: preserve the previous release for legacy importers."
+            exit 0
+          fi
+          echo "has-export=true" >> "$GITHUB_OUTPUT"
+          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/roguix.frolow.dev.pub"
+          # shellcheck disable=SC2024 # Both public keys are runner-readable.
+          sudo "$(command -v guix)" archive --authorize < "$key"
+          # shellcheck disable=SC2024
+          sudo "$(command -v guix)" archive --authorize < modules/roguix/builder.pub
+          guix time-machine --commit="$pin" -- describe
+          if [[ -s input/split/vps-fetch.txt ]]; then
+            xargs -r guix time-machine --commit="$pin" -- build \
+              --substitute-urls=https://bordeaux.guix.gnu.org < input/split/vps-fetch.txt
+          fi
+          if [[ -s input/split/vps-has.txt ]]; then
+            xargs -r guix time-machine --commit="$pin" -- build \
+              --substitute-urls="$SUBSTITUTE_URLS" < input/split/vps-has.txt
+          fi
+          if [[ -s input/split/publish.txt ]]; then
+            zstd -dc "input/roguix-$PREFIX.nar.zst" | \
+              guix time-machine --commit="$pin" -- archive --import
+          fi
+          tag="$PREFIX-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          python3 -m unittest discover -s tests -v
+
+      - name: Sign and mirror substitutes
+        if: steps.prepare.outputs.has-export == 'true'
+        env:
+          SUBSTITUTE_SIGNING_KEY: ${{ secrets.SUBSTITUTE_SIGNING_KEY }}
+        run: |
+          scripts/static-substitutes bake --split input/split --output static-release \
+            --key roguix-channel/modules/roguix/roguix.frolow.dev.pub \
+            --tag "$RELEASE_TAG" --workflow-commit "$GITHUB_SHA"
+
+      - name: Release the verified tree and compatibility archive
+        if: steps.prepare.outputs.has-export == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(static-release/manifest.json static-release/SHA256SUMS static-release/tree-*.tar)
+          # Keep old vps-import clients working until the VPS changes its mode.
+          if [[ -s input/split/publish.txt ]]; then
+            files+=("input/roguix-$PREFIX.nar.zst" input/split/publish.txt input/outputs.txt)
+            for f in input/split/vps-fetch.txt input/split/vps-has.txt; do
+              if [[ -s $f ]]; then files+=("$f"); fi
+            done
+          fi
+          gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TAG" \
+            --notes "Run $GITHUB_RUN_ID; workflow $GITHUB_SHA; channel $CHANNEL_COMMIT; signed static substitutes ($PREFIX)." \
+            "${files[@]}"
+          gh release edit "$RELEASE_TAG" --draft=false

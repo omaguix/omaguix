@@ -5,6 +5,9 @@
 # guix archive --import rejects anything else.
 #
 #   scripts/vps-import [-p PREFIX] [TAG]
+#   scripts/vps-import --static-dir DIR --key PUBLIC_KEY [-p PREFIX] [--keep N] [TAG]
+# Static mode requires static-tree and verify-substitutes.scm alongside
+# this script, Python 3.11+, and Guix. Without --keep, it deletes nothing.
 #
 # PREFIX names the reference-system feed: x86_64-desktop (default)
 # or aarch64-desktop. Archive import and
@@ -12,6 +15,21 @@
 # A TAG names its feed itself:
 # PREFIX-DATE-COMMIT-ATTEMPT.
 set -euo pipefail
+# Static mode is opt-in; the historical archive importer below is unchanged.
+for arg in "$@"; do
+  if [[ $arg == --static-dir ]]; then
+    here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    args=()
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --static-dir) args+=(--directory "${2:?--static-dir needs a directory}"); shift 2 ;;
+        -p) args+=(--prefix "${2:?-p needs a feed prefix}"); shift 2 ;;
+        *) args+=("$1"); shift ;;
+      esac
+    done
+    exec python3 "$here/static-tree" pull "${args[@]}"
+  fi
+done
 repo=roguixos/roguix
 prefix=
 if [ "${1:-}" = -p ]; then

@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Static tarballs, safe installation and manifest-based retention (not Guix signing)."""
+import argparse
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path, PurePosixPath
+
+PIN = "7e74121a40a8308166e328a23647cf6f3768e6c8"
+LIMIT = 2_000_000_000  # GitHub's external per-asset limit, with tar overhead included.
+FEEDS = ("x86_64-desktop", "aarch64-desktop")
+TAG = re.compile(r"(x86_64-desktop|aarch64-desktop)-[0-9]{8}-[0-9a-f]{7,40}-[0-9]+\Z")
+HASH = r"[0-9abcdfghijklmnpqrsvwxyz]{32}"
+VERIFIER = Path(__file__).resolve().with_name("verify-substitutes.scm")
+
+
+def check(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def sha(path):
+    with open(path, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def safe(name):
+    path = PurePosixPath(name)
+    check(not path.is_absolute() and ".." not in path.parts and str(path) == name, "unsafe tar path")
+    check(name == "nix-cache-info" or re.fullmatch(HASH + r"\.narinfo", name) or
+          re.fullmatch(r"nar/(?:gzip/|zstd/)?" + HASH + r"-[A-Za-z0-9+._?=-]+", name), "unexpected tree path")
+    return name
+
+
+def read_manifest(directory):
+    manifest = json.loads((directory / "manifest.json").read_text())
+    match = TAG.fullmatch(manifest["tag"])
+    check(match and match[1] == manifest["prefix"] and manifest["version"] == 1, "invalid manifest/feed")
+    check(manifest["guix_commit"] == PIN, "unreviewed Guix pin")
+    check(all(re.fullmatch(r"tree-[0-9]{4}\.tar", name) for name in manifest["assets"]), "unsafe asset name")
+    return manifest
+
+
+def verify(tree, key, items=None):
+    infos = sorted(tree.glob("*.narinfo")) if items is None else [
+        tree / (Path(item).name.split("-", 1)[0] + ".narinfo") for item in sorted(items)]
+    with tempfile.TemporaryDirectory() as directory:
+        listing = Path(directory) / "infos"
+        listing.write_text("".join(str(p.resolve()) + "\n" for p in infos))
+        env = {**os.environ, "STATIC_PUBLIC_KEY": str(key.resolve()),
+               "STATIC_TREE": str(tree.resolve()), "STATIC_NARINFO_LIST": str(listing)}
+        env.pop("STATIC_SECRET_KEY", None)
+        env.pop("SUBSTITUTE_SIGNING_KEY", None)
+        result = subprocess.run(["guix", "time-machine", "--commit=" + PIN, "--", "repl", "--", str(VERIFIER)],
+                                env=env, check=True, capture_output=True, text=True)
+    rows = [line.split("\t") for line in result.stdout.splitlines()]
+    actual_items = {item for item, _, _ in rows}
+    if items is not None:
+        check(actual_items == set(items), "retained manifest/store path mismatch")
+    else:
+        expected = {"nix-cache-info"} | {p.name for p in infos} | {safe(file) for _, file, _ in rows}
+        check({p.relative_to(tree).as_posix() for p in tree.rglob("*") if p.is_file()} == expected,
+              "missing or unsigned extra tree files")
+    return actual_items
+
+
+def serve(args):
+    if os.getpgrp() != os.getpid():
+        os.setpgid(0, 0)  # Own publisher/compressor group, still a waited-for child.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    port, fd = sock.getsockname()[1], sock.detach()
+    if fd != 3:
+        os.dup2(fd, 3)
+        os.close(fd)
+    os.set_inheritable(3, True)
+    print(port, flush=True)  # Parent's port pipe closes on pre-exec failure.
+    log = os.open(args.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.dup2(log, 1)
+    os.dup2(log, 2)
+    os.close(log)
+    env = {**os.environ, "LISTEN_PID": str(os.getpid()), "LISTEN_FDS": "1"}
+    os.execvpe("guix", ["guix", "time-machine", "--commit=" + PIN, "--", "publish",
+                       "--cache=" + str(args.cache), "--cache-bypass-threshold=0", "--compression=gzip:3",
+                       "--public-key=" + str(args.key), "--private-key=" + str(args.secret)], env)
+
+
+def pack(tree, output, manifest, limit=LIMIT):
+    output.mkdir()
+    batches, batch, used = [], [], 0
+    for path in sorted(p for p in tree.rglob("*") if p.is_file()):
+        safe(path.relative_to(tree).as_posix())
+        cost = path.stat().st_size + 2048  # PAX header and block padding allowance.
+        check(cost + 10240 < limit, "single NAR exceeds tarball limit; refusing release")
+        if used + cost + 10240 >= limit and batch:
+            batches.append(batch)
+            batch, used = [], 0
+        batch.append(path)
+        used += cost
+    assets = []
+    for group in [*batches, batch]:
+        assets.append(f"tree-{len(assets):04d}.tar")
+        with tarfile.open(output / assets[-1], "w") as archive:
+            for path in group:
+                archive.add(path, arcname=path.relative_to(tree).as_posix(), recursive=False)
+    check(all((output / name).stat().st_size < limit for name in assets), "tarball exceeds asset limit")
+    manifest["assets"] = assets
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (output / "SHA256SUMS").write_text("".join(f"{sha(output / name)}  {name}\n"
+                                              for name in ["manifest.json", *assets]))
+
+
+def pack_cli(args):
+    split = args.split
+    paths = lambda name: (split / name).read_text().splitlines()
+    check(TAG.fullmatch(args.tag), "invalid tag")
+    pack(args.tree, args.output, {"version": 1, "tag": args.tag, "prefix": TAG.fullmatch(args.tag)[1],
+         "created": datetime.datetime.now(datetime.timezone.utc).isoformat(), "guix_commit": PIN,
+         "workflow_commit": args.workflow_commit, "channel_commit": paths("channel-commit.txt")[0],
+         "system": paths("system.txt")[0], "roguix": sorted(set(paths("publish.txt") + paths("vps-has.txt")))})
+
+
+def unpack(release, tree, manifest):
+    sums = dict(line.split("  ", 1)[::-1] for line in (release / "SHA256SUMS").read_text().splitlines())
+    check(set(sums) == {"manifest.json", *manifest["assets"]}, "checksum inventory mismatch")
+    check(all(sha(release / name) == value for name, value in sums.items()), "release checksum mismatch")
+    for name in manifest["assets"]:
+        with tarfile.open(release / name) as archive:
+            for member in archive:
+                check(member.type in {tarfile.REGTYPE, tarfile.AREGTYPE}, "tar links/special files forbidden")
+                target = tree / safe(member.name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as source, open(target, "xb") as dest:
+                    shutil.copyfileobj(source, dest)
+
+
+def prune(root, keep, key):
+    check(keep > 0, "N must be positive")
+    records = [(p, json.loads(p.read_text())) for p in (root / ".roguix").glob("*.json")]
+    for path, manifest in records:
+        check(TAG.fullmatch(manifest["tag"]) and path.name == manifest["tag"] + ".json",
+              "unexpected retention record")
+    retained = []
+    for prefix in FEEDS:
+        retained += sorted((r for r in records if r[1]["prefix"] == prefix),
+                           key=lambda r: (datetime.datetime.fromisoformat(r[1]["created"]), r[1]["tag"]), reverse=True)[:keep]
+    check(retained, "no retention manifests")
+    live = {item for _, m in retained for item in m["roguix"]}
+    candidates = list(root.glob("*.narinfo")) + list((root / "nar").rglob("*"))
+    check(not (root / "nar").is_symlink() and not any(p.is_symlink() for p in candidates), "linked tree")
+    for path in candidates:
+        if path.is_file():
+            safe(path.relative_to(root).as_posix())
+    verify(root, key, live)  # Backfill/reused items must exist before any deletion.
+    names = {Path(item).name for item in live}
+    hashes = {name.split("-", 1)[0] for name in names}
+    for path in candidates:  # Narinfos first, then all obsolete NAR URL variants.
+        if path.is_file() and ((path.parent == root and path.stem not in hashes) or
+                               (path.parent != root and path.name not in names)):
+            path.unlink()
+    for path, _ in records:
+        if path not in {p for p, _ in retained}:
+            path.unlink()
+
+
+def install(release, root, key, keep=None, created=None):
+    check(keep is None or keep > 0, "N must be positive")
+    root = root.resolve()
+    state = root / ".roguix"
+    state.mkdir(parents=True, exist_ok=True)
+    check(not state.is_symlink(), "linked installer state")
+    with open(state / "lock", "a") as lock, tempfile.TemporaryDirectory(dir=state) as directory:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        manifest = read_manifest(release)
+        check(shutil.disk_usage(root).free > sum((release / a).stat().st_size for a in manifest["assets"]),
+              "insufficient staging space")
+        tree = Path(directory)
+        unpack(release, tree, manifest)
+        check(verify(tree, key) <= set(manifest["roguix"]), "tree not covered by full manifest")
+        files = sorted((p for p in tree.rglob("*") if p.is_file()), key=lambda p: p.parent == tree and p.suffix == ".narinfo")
+        for path in files:
+            target = root / path.relative_to(tree)
+            check(not any(p.is_symlink() for p in [target, *target.parents] if p.is_relative_to(root)),
+                  "linked destination")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o644)
+            os.replace(path, target)
+        if created:
+            manifest["created"] = created
+        record = state / (manifest["tag"] + ".json")
+        temp = Path(directory) / "record"
+        temp.write_text(json.dumps(manifest) + "\n")
+        os.replace(temp, record)
+        if keep is not None:
+            prune(root, keep, key)
+
+
+def fetch(url, path):
+    with urllib.request.urlopen(url, timeout=60) as response, open(path, "xb") as dest:
+        shutil.copyfileobj(response, dest)
+
+
+def releases():
+    result = []
+    for page in range(1, 21):  # Bounded GitHub API pagination; fail rather than prune incomplete history.
+        with urllib.request.urlopen(f"https://api.github.com/repos/roguixos/roguix/releases?per_page=100&page={page}", timeout=60) as response:
+            batch = json.load(response)
+        result += [r for r in batch if TAG.fullmatch(r["tag_name"]) and not r["draft"] and not r["prerelease"]
+                   and any(a["name"] == "manifest.json" for a in r["assets"])]
+        if len(batch) < 100:
+            return sorted(result, key=lambda r: r["published_at"], reverse=True)
+    raise ValueError("release history exceeds 2000 entries")
+
+
+def pull(args):
+    history = releases()
+    selected = [r for r in history if r["tag_name"] == args.tag] if args.tag else [
+        r for r in history if r["tag_name"].startswith(args.prefix + "-")][:1]
+    check(selected, "no static release")
+    if args.keep is not None:
+        check(args.keep > 0, "N must be positive")
+        for prefix in FEEDS:
+            selected += [r for r in history if r["tag_name"].startswith(prefix + "-")][:args.keep]
+    root = args.directory
+    root.mkdir(parents=True, exist_ok=True)
+    for release in sorted({r["tag_name"]: r for r in selected}.values(), key=lambda r: r["published_at"]):
+        with tempfile.TemporaryDirectory(dir=root) as directory:
+            dest = Path(directory)
+            base = "https://github.com/roguixos/roguix/releases/download/" + release["tag_name"]
+            fetch(base + "/manifest.json", dest / "manifest.json")
+            manifest = read_manifest(dest)
+            check(manifest["tag"] == release["tag_name"], "wrong release manifest")
+            for name in ["SHA256SUMS", *manifest["assets"]]:
+                fetch(base + "/" + name, dest / name)
+            install(dest, root, args.key, created=release["published_at"])
+    if args.keep is not None:
+        with open(root / ".roguix/lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            prune(root.resolve(), args.keep, args.key)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name, fields in {"serve": "key secret cache log", "pack": "tree split output tag workflow-commit",
+                         "install": "release directory key", "pull": "directory key"}.items():
+        sub = commands.add_parser(name)
+        for field in fields.split():
+            sub.add_argument("--" + field, required=True, type=str if field in {"tag", "workflow-commit"} else Path)
+        if name in {"install", "pull"}:
+            sub.add_argument("--keep", type=int)
+        if name == "pull":
+            sub.add_argument("--prefix", choices=FEEDS, default=FEEDS[0])
+            sub.add_argument("tag", nargs="?")
+    args = parser.parse_args()
+    try:
+        if args.command == "install":
+            install(args.release, args.directory, args.key, args.keep)
+        else:
+            {"serve": serve, "pack": pack_cli, "pull": pull}[args.command](args)
+    except (ValueError, OSError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as error:
+        print(f"static-tree: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
