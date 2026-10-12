@@ -1,6 +1,6 @@
 # Build the channel's complete reference system, not a machine's package list.
 # Export only package closure items no configured substitute server serves.
-name: build-aarch64-desktop
+name: build-desktop
 
 on:
   push:
@@ -10,18 +10,14 @@ on:
       - scripts/desktop-split
       - scripts/reference-system-licenses.scm
       - modules/roguix/builder.pub
-      - .github/workflows/build-aarch64-desktop.yml
+      - .github/workflows/build-desktop.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: build-aarch64-desktop
-  cancel-in-progress: false
-
 env:
-  TRY_ROGUIX_COMMIT: 85f1fdc56b75a0bb72e14b3579f86bc90c483401
+  TRY_ROGUIX_COMMIT: 65c2575f714fdfd9fd0d570d0dd321528fed8c06
   SUBSTITUTE_URLS: >-
     https://bordeaux.guix.gnu.org https://roguix.frolow.dev
 
@@ -31,7 +27,23 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            prefix: aarch64-desktop
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+            prefix: x86_64-desktop
+    runs-on: ${{ matrix.runner }}
+    concurrency:
+      group: build-${{ matrix.prefix }}
+      cancel-in-progress: false
+    env:
+      GUIX_SYSTEM: ${{ matrix.system }}
+      PREFIX: ${{ matrix.prefix }}
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +80,7 @@ jobs:
       - name: Build
         run: |
           guix time-machine --commit="$GUIX_COMMIT" -- \
-            system build --no-grafts --system=aarch64-linux \
+            system build --no-grafts --system="$GUIX_SYSTEM" \
             --substitute-urls="$SUBSTITUTE_URLS" -L "$ROGUIX_MODULES" \
             -e '(@ (roguix system) %roguix-reference-system)' | tee outputs.txt
 
@@ -80,7 +92,7 @@ jobs:
           guix time-machine --commit="$GUIX_COMMIT" -- \
             repl -L "$ROGUIX_MODULES" -- scripts/reference-system-licenses.scm > split/licenses.txt
           guix gc -R $(cat outputs.txt) | sort -u > split/closure.txt
-          scripts/desktop-split --reference-system split
+          scripts/desktop-split split
           wc -l split/*.txt
 
       - name: Export
@@ -97,8 +109,8 @@ jobs:
           sudo install -m 600 /dev/null /etc/guix/signing-key.sec
           printf '%s\n' "$BUILDER_KEY" | sudo tee /etc/guix/signing-key.sec > /dev/null
           sudo install -m 644 modules/roguix/builder.pub /etc/guix/signing-key.pub
-          guix archive --export $(cat split/publish.txt) | zstd -T0 -12 > roguix-aarch64-desktop.nar.zst
-          ls -l roguix-aarch64-desktop.nar.zst
+          guix archive --export $(cat split/publish.txt) | zstd -T0 -12 > "roguix-$PREFIX.nar.zst"
+          ls -l "roguix-$PREFIX.nar.zst"
 
       - name: Release
         if: github.ref == 'refs/heads/main'
@@ -109,16 +121,16 @@ jobs:
             echo "bordeaux and roguix.frolow.dev serve all package items: no release"
             exit 0
           fi
-          files=(roguix-aarch64-desktop.nar.zst split/publish.txt outputs.txt)
+          files=("roguix-$PREFIX.nar.zst" split/publish.txt outputs.txt)
           for f in "${files[@]}"; do
             [ -s "$f" ] || { echo "release: $f is missing or empty" >&2; exit 1; }
           done
           # GitHub rejects empty assets; the importer accepts an absent
-          # vps-fetch.txt as an empty set for this feed.
+          # vps-fetch.txt as an empty set for either feed.
           for f in split/vps-fetch.txt split/vps-has.txt; do
             if [ -s "$f" ]; then files+=("$f"); fi
           done
-          tag="aarch64-desktop-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
+          tag="$PREFIX-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ATTEMPT}"
           gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" \
-            --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA: reference system of try-roguix $TRY_ROGUIX_COMMIT, Guix $GUIX_COMMIT, aarch64-linux, no grafts." \
+            --notes "Built by run $GITHUB_RUN_ID from $GITHUB_SHA: reference system of try-roguix $TRY_ROGUIX_COMMIT, Guix $GUIX_COMMIT, $GUIX_SYSTEM, no grafts." \
             "${files[@]}"

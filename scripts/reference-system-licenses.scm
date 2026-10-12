@@ -1,13 +1,17 @@
 ;; Print ungrafted package output licences for the reference system, including
 ;; packages referenced only by services, gexps, and their implicit inputs.
-;; Usage: guix repl -L MODULES -- scripts/reference-system-licenses.scm
-;; The native aarch64 runner uses the same system and graft setting as Build.
+;; Usage: GUIX_SYSTEM=SYSTEM guix repl -L MODULES -- scripts/reference-system-licenses.scm
+;; Each native runner uses the same system and graft setting as Build.
 (use-modules (gnu system) (guix) (guix packages) (guix gexp)
              (guix grafts) (guix derivations) (guix licenses)
              (guix monads) (ice-9 match) (srfi srfi-1)
              (roguix system))
 
-(define system "aarch64-linux")
+(define system
+  (or (getenv "GUIX_SYSTEM")
+      (error "GUIX_SYSTEM must name the reference system's architecture")))
+(unless (member system '("aarch64-linux" "x86_64-linux"))
+  (error "unsupported GUIX_SYSTEM" system))
 (define packages '())
 
 ;; Observe package lowering while evaluating the entire operating system.

@@ -6,8 +6,8 @@
 #
 #   scripts/vps-import [-p PREFIX] [TAG]
 #
-# PREFIX names the feed: x86_64-desktop (default, channels-desktop.scm)
-# or aarch64-desktop (try-roguix's reference system). Archive import and
+# PREFIX names the reference-system feed: x86_64-desktop (default)
+# or aarch64-desktop. Archive import and
 # substitution of explicit store paths work across architectures.
 # A TAG names its feed itself:
 # PREFIX-DATE-COMMIT-ATTEMPT.
@@ -36,21 +36,16 @@ cd "$dir"
 for f in "$archive" publish.txt; do
   [ -s "$f" ] || curl -sfL -o "$f" "https://github.com/$repo/releases/download/$tag/$f"
 done
-if [ "$prefix" = aarch64-desktop ]; then
-  # GitHub cannot attach an empty asset. Only this feed permits an absent
-  # vps-fetch.txt, meaning no bordeaux items; other HTTP errors still fail.
-  if [ ! -f vps-fetch.txt ]; then
-    code=$(curl -sSL -o vps-fetch.txt.tmp -w '%{http_code}' \
-      "https://github.com/$repo/releases/download/$tag/vps-fetch.txt")
-    case "$code" in
-      200) mv vps-fetch.txt.tmp vps-fetch.txt ;;
-      404) rm vps-fetch.txt.tmp; : > vps-fetch.txt ;;
-      *) echo "vps-import: vps-fetch.txt HTTP $code" >&2; exit 1 ;;
-    esac
-  fi
-else
-  [ -s vps-fetch.txt ] || curl -sfL -o vps-fetch.txt \
-    "https://github.com/$repo/releases/download/$tag/vps-fetch.txt"
+# GitHub cannot attach an empty asset. Both feeds permit an absent
+# vps-fetch.txt, meaning no bordeaux items; other HTTP errors still fail.
+if [ ! -f vps-fetch.txt ]; then
+  code=$(curl -sSL -o vps-fetch.txt.tmp -w '%{http_code}' \
+    "https://github.com/$repo/releases/download/$tag/vps-fetch.txt")
+  case "$code" in
+    200) mv vps-fetch.txt.tmp vps-fetch.txt ;;
+    404) rm vps-fetch.txt.tmp; : > vps-fetch.txt ;;
+    *) echo "vps-import: vps-fetch.txt HTTP $code" >&2; exit 1 ;;
+  esac
 fi
 
 # guix archive --import needs every reference valid: take those from
