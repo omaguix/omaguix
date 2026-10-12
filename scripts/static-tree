@@ -19,7 +19,25 @@ from pathlib import Path, PurePosixPath
 PIN = "7e74121a40a8308166e328a23647cf6f3768e6c8"
 LIMIT = 2_000_000_000  # GitHub's external per-asset limit, with tar overhead included.
 FEEDS = ("x86_64-desktop", "aarch64-desktop")
-TAG = re.compile(r"(x86_64-desktop|aarch64-desktop)-[0-9]{8}-[0-9a-f]{7,40}-[0-9]+\Z")
+ARCHES = ("x86_64", "aarch64")
+DESKTOP = re.compile(r"(x86_64-desktop|aarch64-desktop)-[0-9]{8}-[0-9a-f]{7,40}-[0-9]+\Z")
+BACKFILL = re.compile(r"(backfill-(?:x86_64|aarch64))-[0-9]{8}T[0-9]{6}Z\Z")
+
+
+class Tag:  # Release or backfill tag; [1] is the manifest prefix.
+    @staticmethod
+    def fullmatch(tag):
+        match = DESKTOP.fullmatch(tag) or BACKFILL.fullmatch(tag)
+        if match and match.re is BACKFILL:
+            try:
+                datetime.datetime.strptime(tag[-16:], "%Y%m%dT%H%M%SZ")
+            except ValueError:
+                return None
+        return match
+
+
+TAG = Tag
+STORE_ITEM = re.compile(r"/gnu/store/(" + r"[0-9abcdfghijklmnpqrsvwxyz]{32}" + r")-[A-Za-z0-9+._?=-]+\Z")
 HASH = r"[0-9abcdfghijklmnpqrsvwxyz]{32}"
 VERIFIER = Path(__file__).resolve().with_name("verify-substitutes.scm")
 
@@ -131,6 +149,36 @@ def pack_cli(args):
          "system": paths("system.txt")[0], "roguix": sorted(set(paths("publish.txt") + paths("vps-has.txt")))})
 
 
+def pack_backfill(args):
+    check(args.arch in ARCHES, "invalid architecture")
+    items = args.items.read_text().split("\n")
+    check(items and items[-1] == "", "items file must end with a newline")
+    items = items[:-1]
+    check(items and all(STORE_ITEM.fullmatch(i) for i in items), "blank or non-/gnu/store item line")
+    check(len(set(items)) == len(items), "duplicate item")
+    with tempfile.TemporaryDirectory(dir=args.output.parent) as directory:
+        stage = Path(directory)
+        files = {"nix-cache-info"}
+        for item in items:
+            name = STORE_ITEM.fullmatch(item)[1] + ".narinfo"
+            lines = (args.tree / name).read_text().splitlines()  # Missing narinfo raises.
+            fields = dict(line.split(": ", 1) for line in lines if ": " in line)
+            check(fields.get("StorePath") == item and "URL" in fields, "narinfo does not match listed item")
+            files |= {name, safe(PurePosixPath(fields["URL"].lstrip("/")).as_posix())}
+        for name in sorted(files):
+            source = args.tree / name
+            check(source.is_file() and not source.is_symlink(), "missing tree file: " + name)
+            (stage / name).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source, stage / name)
+            except OSError:
+                shutil.copyfile(source, stage / name)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        tag = f"backfill-{args.arch}-{now:%Y%m%dT%H%M%SZ}"
+        pack(stage, args.output, {"version": 1, "tag": tag, "prefix": "backfill-" + args.arch,
+             "created": now.isoformat(), "guix_commit": PIN, "roguix": sorted(items)})
+
+
 def unpack(release, tree, manifest):
     sums = dict(line.split("  ", 1)[::-1] for line in (release / "SHA256SUMS").read_text().splitlines())
     check(set(sums) == {"manifest.json", *manifest["assets"]}, "checksum inventory mismatch")
@@ -151,12 +199,15 @@ def prune(root, keep, key):
     for path, manifest in records:
         check(TAG.fullmatch(manifest["tag"]) and path.name == manifest["tag"] + ".json",
               "unexpected retention record")
-    retained = []
+        check(TAG.fullmatch(manifest["tag"])[1] == manifest["prefix"], "unexpected retention record")
+    retained, backfills = [], [r for r in records if r[1]["prefix"].startswith("backfill-")]
     for prefix in FEEDS:
         retained += sorted((r for r in records if r[1]["prefix"] == prefix),
                            key=lambda r: (datetime.datetime.fromisoformat(r[1]["created"]), r[1]["tag"]), reverse=True)[:keep]
-    check(retained, "no retention manifests")
-    live = {item for _, m in retained for item in m["roguix"]}
+    covered = {item for _, m in retained for item in m["roguix"]}
+    kept = [r for r in backfills if set(r[1]["roguix"]) - covered]  # Removed once releases cover all items.
+    check(retained or kept, "no retention manifests")
+    live = covered | {item for _, m in kept for item in m["roguix"]}
     candidates = list(root.glob("*.narinfo")) + list((root / "nar").rglob("*"))
     check(not (root / "nar").is_symlink() and not any(p.is_symlink() for p in candidates), "linked tree")
     for path in candidates:
@@ -170,7 +221,7 @@ def prune(root, keep, key):
                                (path.parent != root and path.name not in names)):
             path.unlink()
     for path, _ in records:
-        if path not in {p for p, _ in retained}:
+        if path not in {p for p, _ in retained + kept}:
             path.unlink()
 
 
@@ -216,7 +267,7 @@ def releases():
     for page in range(1, 21):  # Bounded GitHub API pagination; fail rather than prune incomplete history.
         with urllib.request.urlopen(f"https://api.github.com/repos/roguixos/roguix/releases?per_page=100&page={page}", timeout=60) as response:
             batch = json.load(response)
-        result += [r for r in batch if TAG.fullmatch(r["tag_name"]) and not r["draft"] and not r["prerelease"]
+        result += [r for r in batch if DESKTOP.fullmatch(r["tag_name"]) and not r["draft"] and not r["prerelease"]
                    and any(a["name"] == "manifest.json" for a in r["assets"])]
         if len(batch) < 100:
             return sorted(result, key=lambda r: r["published_at"], reverse=True)
@@ -254,10 +305,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     for name, fields in {"serve": "key secret cache log", "pack": "tree split output tag workflow-commit",
-                         "install": "release directory key", "pull": "directory key"}.items():
+                         "install": "release directory key", "pull": "directory key",
+                         "pack-backfill": "tree items arch output"}.items():
         sub = commands.add_parser(name)
         for field in fields.split():
-            sub.add_argument("--" + field, required=True, type=str if field in {"tag", "workflow-commit"} else Path)
+            sub.add_argument("--" + field, required=True, type=str if field in {"tag", "workflow-commit", "arch"} else Path)
         if name in {"install", "pull"}:
             sub.add_argument("--keep", type=int)
         if name == "pull":
@@ -268,7 +320,7 @@ def main():
         if args.command == "install":
             install(args.release, args.directory, args.key, args.keep)
         else:
-            {"serve": serve, "pack": pack_cli, "pull": pull}[args.command](args)
+            {"serve": serve, "pack": pack_cli, "pull": pull, "pack-backfill": pack_backfill}[args.command](args)
     except (ValueError, OSError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as error:
         print(f"static-tree: {error}", file=sys.stderr)
         return 1
