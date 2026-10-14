@@ -3,11 +3,11 @@
 ## Context
 
 Owner decisions of 2026-10-12: CI signs substitutes for
-`https://substitutes.roguix.org` with a **fresh** key generated off the VPS (on
+`https://substitutes.omaguix.org` with a **fresh** key generated off the VPS (on
 the owner's Guix machine) and held only in environment secret
 `SUBSTITUTE_SIGNING_KEY`. The old `roguix.frolow.dev` key is erased from the VPS
-and GitHub. The public key is `modules/roguix/substitutes.roguix.org.pub` in
-roguix-channel; try-roguix adds it. Until then the workflow does not run
+and GitHub. The public key is `modules/roguix/substitutes.omaguix.org.pub` in
+omaguix-channel; try-omaguix adds it. Until then the workflow does not run
 (pushes use `[skip ci]`).
 
 Protocol verified at Guix pin `7e74121a40a8308166e328a23647cf6f3768e6c8`:
@@ -28,6 +28,22 @@ its bytes, not Nix `Sig:` format. `NarHash` hashes the **uncompressed single-ite
 NAR**, not compressed bytes or an export bundle. Relative URLs resolve at root.
 
 ## Decision
+
+### Omaguix URL cutover
+
+The repositories are now `omaguix/omaguix`, `omaguix/omaguix-channel` and
+`omaguix/try-omaguix`. The substitute hostname is renamed to
+`substitutes.omaguix.org` with the same fresh key described above, not a further
+key rotation. The channel coordinator owns and publishes
+`modules/roguix/substitutes.omaguix.org.pub`; its exact file SHA256 is
+`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`.
+This repository does not publish that key.
+
+Guix module/package identifiers and store identities, the authentication
+introduction/fingerprint/keyring, local workflow checkout path `roguix-channel`,
+archive names, static layout/state and CLI contracts remain unchanged.
+Manual signer authorization is not expanded. Rebuilds and profile P integration
+are outside this URL-only cutover.
 
 ### CI signing and release
 
@@ -51,7 +67,7 @@ Before exposing the production key, install pinned Guix, authorize
 Roguix, and `guix archive --import` the builder-signed export into the fresh
 runner store. This works across architectures; do not execute imported code.
 Only the signing step receives environment secret `SUBSTITUTE_SIGNING_KEY`.
-Write it mode 0600, confirm its public half equals `substitutes.roguix.org.pub`,
+Write it mode 0600, confirm its public half equals `substitutes.omaguix.org.pub`,
 and run pinned `guix publish` bound to localhost with explicit key files,
 `--cache`, `--cache-bypass-threshold=0`, and `--compression=gzip:3`.
 For every `publish.txt` item request its narinfo, waiting with a bounded poll
@@ -64,7 +80,7 @@ signature stripping or custom signer.
 
 Verification parses narinfos, computes SHA256 of the exact pre-signature bytes
 with required signed fields present, and uses `signature-case` against an ACL
-containing **only the substitutes.roguix.org key**; accept only `valid-signature`.
+containing **only the substitutes.omaguix.org key**; accept only `valid-signature`.
 Do not use `valid-narinfo?` as the verification interface. Decompress each NAR
 and compare its SHA256 and byte count with `NarHash`/`NarSize`.
 Release the tree tarball and manifest/checksums; partition below 2 GiB per asset.
@@ -77,13 +93,13 @@ The VPS continues pulling releases; CI needs no SSH credentials. Safely extract
 into staging (reject traversal, links and special files), verify signatures,
 hashes and manifests, and merge into `/var/lib/roguix-substitutes` under a lock.
 Install NARs before narinfos with atomic renames. The VPS serves that root
-statically as `https://substitutes.roguix.org` (nginx: `/nix-cache-info`,
+statically as `https://substitutes.omaguix.org` (nginx: `/nix-cache-info`,
 `/<hash>.narinfo`, the advertised `/nar/...` paths; roguix-vps owns the serving
 side). No dynamic HTTP compression, directory listing, uploads or `guix publish`
 fallback.
 
 Cutover is clean: guests trust only the new key, with no dual-key release.
-There is no backfill: once `substitutes.roguix.org` serves, `roguix.frolow.dev`
+There is no backfill: once `substitutes.omaguix.org` serves, `roguix.frolow.dev`
 is switched off and nothing it served is carried over.
 
 Keep items referenced by the latest **N releases per architecture**; union full
@@ -95,7 +111,7 @@ after pruning.
 
 ### Repository changes and order
 
-1. **roguixos/roguix:** amend `build-desktop.yml` for pinned actions/artifacts
+1. **omaguix/omaguix:** amend `build-desktop.yml` for pinned actions/artifacts
    and the protected signing job; add a small publish/mirror/verification helper,
    update `scripts/vps-import` for static releases and retention manifests, and
    README/tests. Keep existing imports working until static delivery is tested.
@@ -106,7 +122,7 @@ after pruning.
    pulls, static directory, retention and nginx in live Debian config
    and `modules/roguix-vps/system.scm`. Serve statically, switch off
    `roguix.frolow.dev`, erase the old key/backups. Preserve TLS/personal-site vhosts.
-4. **try-roguix:** adds `substitutes.roguix.org.pub` and the new endpoint.
+4. **omaguix/try-omaguix:** adds `substitutes.omaguix.org.pub` and the new endpoint.
 
 ## Alternatives
 

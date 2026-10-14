@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Split the Roguix desktop's package closure for substitutes.roguix.org, in
+# Split the Roguix desktop's package closure for substitutes.omaguix.org, in
 # the reference-system workflow. Only reads public narinfo URLs and the
 # local store.
 #
@@ -16,10 +16,10 @@
 # and receives:
 #   packages.txt         licenses.txt's paths that are in closure.txt
 #   package-closure.txt  `guix gc -R` of packages.txt: what is split
-#   closure-status.txt   bordeaux and substitutes.roguix.org narinfo
+#   closure-status.txt   bordeaux and substitutes.omaguix.org narinfo
 #                        status per item ("-": not asked)
 #   vps-fetch.txt        items bordeaux serves: the VPS substitutes them
-#   vps-has.txt          items substitutes.roguix.org already serves: not exported
+#   vps-has.txt          items substitutes.omaguix.org already serves: not exported
 #   publish.txt          the rest, exported: the VPS has nowhere to fetch them
 #
 # It fails, publishing nothing, when a server gives no clear answer, when
@@ -43,14 +43,14 @@ echo "desktop-split: $(wc -l < "$dir/packages.txt") package outputs," \
   "$(wc -l < "$closure") items in their closure," \
   "$(sort -u "$dir/closure.txt" | comm -23 - "$closure" | wc -l) system items left out"
 
-# substitutes.roguix.org is asked only about items bordeaux does not serve: its
+# substitutes.omaguix.org is asked only about items bordeaux does not serve: its
 # guix publish starts compressing any item it holds but has not baked.
 narinfo_status() {
   local hash bordeaux vps=-
   hash=$(basename "$1" | cut -d- -f1)
   bordeaux=$(curl -s -o /dev/null -w '%{http_code}' "https://bordeaux.guix.gnu.org/$hash.narinfo")
   if [ "$bordeaux" != 200 ]; then
-    vps=$(curl -s -o /dev/null -w '%{http_code}' "https://substitutes.roguix.org/$hash.narinfo")
+    vps=$(curl -s -o /dev/null -w '%{http_code}' "https://substitutes.omaguix.org/$hash.narinfo")
   fi
   printf '%s %s %s\n' "$bordeaux" "$vps" "$1"
 }

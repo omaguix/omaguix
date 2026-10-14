@@ -40,7 +40,7 @@
 
 (define (check-info file)
   (let* ((info (call-with-input-file file
-                 (lambda (p) (read-narinfo p "https://substitutes.roguix.org"))))
+                 (lambda (p) (read-narinfo p "https://substitutes.omaguix.org"))))
          (contents (and info (narinfo-contents info)))
          (index (and contents (string-contains contents "Signature:")))
          (signature (and info (narinfo-signature info))))
@@ -71,7 +71,7 @@
                                       (basename (narinfo-path info))))
               (path (uri-path uri)))
          (unless (and (eq? (uri-scheme uri) 'https)
-                      (equal? (uri-host uri) "substitutes.roguix.org")
+                      (equal? (uri-host uri) "substitutes.omaguix.org")
                       (not (uri-query uri)) (not (uri-fragment uri))
                       (member (uri-decode path) (list (string-append "/" relative)
                                                      (string-append "//" relative))))

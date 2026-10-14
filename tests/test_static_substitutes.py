@@ -1,6 +1,8 @@
 """Archive/install fixtures mock Guix; the optional integration uses real throwaway keys."""
 import importlib.machinery
 import importlib.util
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -9,6 +11,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +224,56 @@ server.serve_forever()
         finally:
             process.terminate()
             process.communicate()
+
+    def test_release_api_and_downloads_use_omaguix(self):
+        release, _ = self.release()
+        tag = tree.read_manifest(release)["tag"]
+        record = {"tag_name": tag, "draft": False, "prerelease": False,
+                  "published_at": "2026-10-12T12:00:01+00:00",
+                  "assets": [{"name": "manifest.json"}]}
+        with mock.patch.object(tree.urllib.request, "urlopen",
+                               return_value=io.BytesIO(json.dumps([record]).encode())) as request:
+            self.assertEqual(tree.releases(), [record])
+        request.assert_called_once_with(
+            "https://api.github.com/repos/omaguix/omaguix/releases?per_page=100&page=1", timeout=60)
+        urls = []
+        def fetch(url, destination):
+            urls.append(url)
+            shutil.copyfile(release / url.rsplit("/", 1)[1], destination)
+        with mock.patch.object(tree, "releases", return_value=[record]), \
+                mock.patch.object(tree, "fetch", side_effect=fetch):
+            tree.pull(SimpleNamespace(tag=None, prefix="x86_64-desktop", keep=None,
+                                      directory=self.root / "pulled", key=self.key))
+        self.assertEqual({url.rsplit("/", 1)[0] for url in urls},
+                         {"https://github.com/omaguix/omaguix/releases/download/" + tag})
+
+    def test_url_cutover_preserves_local_and_guix_contracts(self):
+        source = (ROOT / ".github/workflows/build-desktop.yml").read_text()
+        self.assertIn("git ls-remote https://github.com/omaguix/omaguix-channel main", source)
+        self.assertEqual(source.count("repository: omaguix/omaguix-channel"), 2)
+        self.assertEqual(source.count("path: roguix-channel"), 2)
+        self.assertEqual(source.count("bcc938512706d19de86dd8c6f50853fa80b063b8"), 2)
+        self.assertEqual(source.count("7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E"), 2)
+        self.assertEqual(source.count("--keyring=origin/keyring"), 2)
+        for text in ("https://substitutes.omaguix.org", "roguix/substitutes.omaguix.org.pub",
+                     "(@ (roguix system) %roguix-reference-system)", "roguix-$PREFIX.nar.zst"):
+            self.assertIn(text, source)
+        importer = (ROOT / "scripts/vps-import").read_text()
+        for text in ("repo=omaguix/omaguix", "prefix=${prefix:-x86_64-desktop}",
+                     "archive=roguix-$prefix.nar.zst", "/var/cache/roguix-import/$tag"):
+            self.assertIn(text, importer)
+        self.assertIn("https://github.com/omaguix/omaguix/releases/download/",
+                      (ROOT / "scripts/ci-install-guix").read_text())
+        self.assertIn('"https://substitutes.omaguix.org/$hash.narinfo"',
+                      (ROOT / "scripts/desktop-split").read_text())
+        verifier = (ROOT / "scripts/verify-substitutes.scm").read_text()
+        self.assertIn('(read-narinfo p "https://substitutes.omaguix.org")', verifier)
+        self.assertIn('(equal? (uri-host uri) "substitutes.omaguix.org")', verifier)
+        for path in [ROOT / ".github/workflows/build-desktop.yml", ROOT / "README.md",
+                     ROOT / "docs/decisions/0001-sign-substitutes-in-ci.md", *sorted((ROOT / "scripts").iterdir())]:
+            text = path.read_text()
+            for old in ("roguixos/roguix", "roguixos/try-roguix", "substitutes.roguix.org"):
+                self.assertNotIn(old, text, str(path))
 
     def test_workflow_main_push_and_owner_dispatch_scope(self):
         source = (ROOT / ".github/workflows/build-desktop.yml").read_text()

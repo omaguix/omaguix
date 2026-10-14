@@ -214,7 +214,7 @@ def fetch(url, path):
 def releases():
     result = []
     for page in range(1, 21):  # Bounded GitHub API pagination; fail rather than prune incomplete history.
-        with urllib.request.urlopen(f"https://api.github.com/repos/roguixos/roguix/releases?per_page=100&page={page}", timeout=60) as response:
+        with urllib.request.urlopen(f"https://api.github.com/repos/omaguix/omaguix/releases?per_page=100&page={page}", timeout=60) as response:
             batch = json.load(response)
         result += [r for r in batch if TAG.fullmatch(r["tag_name"]) and not r["draft"] and not r["prerelease"]
                    and any(a["name"] == "manifest.json" for a in r["assets"])]
@@ -237,7 +237,7 @@ def pull(args):
     for release in sorted({r["tag_name"]: r for r in selected}.values(), key=lambda r: r["published_at"]):
         with tempfile.TemporaryDirectory(dir=root) as directory:
             dest = Path(directory)
-            base = "https://github.com/roguixos/roguix/releases/download/" + release["tag_name"]
+            base = "https://github.com/omaguix/omaguix/releases/download/" + release["tag_name"]
             fetch(base + "/manifest.json", dest / "manifest.json")
             manifest = read_manifest(dest)
             check(manifest["tag"] == release["tag_name"], "wrong release manifest")

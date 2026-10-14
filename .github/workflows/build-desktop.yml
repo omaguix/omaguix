@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       channel_commit:
-        description: roguix-channel commit (40 lowercase hex characters)
+        description: omaguix-channel commit (40 lowercase hex characters)
         required: true
         type: string
 
@@ -30,7 +30,7 @@ permissions:
 
 env:
   SUBSTITUTE_URLS: >-
-    https://bordeaux.guix.gnu.org https://substitutes.roguix.org
+    https://bordeaux.guix.gnu.org https://substitutes.omaguix.org
 
 defaults:
   run:
@@ -51,7 +51,7 @@ jobs:
           if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
             commit=$REQUESTED_COMMIT
           else
-            commit=$(git ls-remote https://github.com/roguixos/roguix-channel main | awk '$2 == "refs/heads/main" { print $1 }')
+            commit=$(git ls-remote https://github.com/omaguix/omaguix-channel main | awk '$2 == "refs/heads/main" { print $1 }')
           fi
           [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid channel commit" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: roguixos/roguix-channel
+          repository: omaguix/omaguix-channel
           ref: ${{ env.CHANNEL_COMMIT }}
           path: roguix-channel
           fetch-depth: 0
@@ -113,11 +113,11 @@ jobs:
           echo "ROGUIX_MODULES=$GITHUB_WORKSPACE/roguix-channel/modules" >> "$GITHUB_ENV"
 
       # ci-install-guix authorizes bordeaux's key from the binary tarball.
-      - name: Trust substitutes.roguix.org substitutes
+      - name: Trust substitutes.omaguix.org substitutes
         run: |
           guix=$(command -v guix)
           # shellcheck disable=SC2024 # The public key is readable by the runner.
-          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/substitutes.roguix.org.pub"
+          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/substitutes.omaguix.org.pub"
 
       - name: Get the reference system's Guix
         run: |
@@ -154,7 +154,7 @@ jobs:
           BUILDER_KEY: ${{ secrets.BUILDER_SIGNING_KEY }}
         run: |
           if [ ! -s split/publish.txt ]; then
-            echo "bordeaux and substitutes.roguix.org serve all package items: no export"
+            echo "bordeaux and substitutes.omaguix.org serve all package items: no export"
             exit 0
           fi
           # Remove the secret even if export fails.
@@ -224,7 +224,7 @@ jobs:
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: roguixos/roguix-channel
+          repository: omaguix/omaguix-channel
           ref: ${{ env.CHANNEL_COMMIT }}
           path: roguix-channel
           fetch-depth: 0
@@ -272,7 +272,7 @@ jobs:
             exit 0
           fi
           echo "has-export=true" >> "$GITHUB_OUTPUT"
-          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/substitutes.roguix.org.pub"
+          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/substitutes.omaguix.org.pub"
           # shellcheck disable=SC2024 # Both public keys are runner-readable.
           sudo "$(command -v guix)" archive --authorize < "$key"
           # shellcheck disable=SC2024
@@ -300,7 +300,7 @@ jobs:
           SUBSTITUTE_SIGNING_KEY: ${{ secrets.SUBSTITUTE_SIGNING_KEY }}
         run: |
           scripts/static-substitutes bake --split input/split --output static-release \
-            --key roguix-channel/modules/roguix/substitutes.roguix.org.pub \
+            --key roguix-channel/modules/roguix/substitutes.omaguix.org.pub \
             --tag "$RELEASE_TAG" --workflow-commit "$GITHUB_SHA"
 
       - name: Release the verified tree and compatibility archive

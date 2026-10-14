@@ -7,7 +7,7 @@
 # To move to another release: change VERSION and both SHA256 values (each
 # taken only after `gpg --verify` of its .sig from ftp.gnu.org printed
 # "Good signature"), and upload both tarballs as assets of a
-# release guix-binary-VERSION of roguixos/roguix (the fallback below).
+# release guix-binary-VERSION of omaguix/omaguix (the fallback below).
 set -euo pipefail
 
 VERSION=1.5.0
@@ -20,7 +20,7 @@ esac
 TARBALL=guix-binary-$VERSION.$ARCH-linux.tar.xz
 URLS=(
   "https://ftpmirror.gnu.org/gnu/guix/$TARBALL"
-  "https://github.com/roguixos/roguix/releases/download/guix-binary-$VERSION/$TARBALL"
+  "https://github.com/omaguix/omaguix/releases/download/guix-binary-$VERSION/$TARBALL"
 )
 GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
 SOCKET=/var/guix/daemon-socket/socket

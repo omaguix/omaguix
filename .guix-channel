@@ -1,6 +1,6 @@
 ;; No modules of its own any more: modules/ keeps only CI's builder key.
-;; The Roguix desktop's modules are in try-roguix and published as
-;; roguix-channel.
+;; The Roguix desktop's modules are in omaguix/try-omaguix and published as
+;; omaguix/omaguix-channel.
 (channel
  (version 0)
  (directory "modules"))

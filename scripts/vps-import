@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run as root on substitutes.roguix.org: import the newest release of a feed,
+# Run as root on substitutes.omaguix.org: import the newest release of a feed,
 # so guix publish serves it.  The archive is signed with the builder key,
 # modules/roguix/builder.pub, which the host must authorize;
 # guix archive --import rejects anything else.
@@ -30,7 +30,7 @@ for arg in "$@"; do
     exec python3 "$here/static-tree" pull "${args[@]}"
   fi
 done
-repo=roguixos/roguix
+repo=omaguix/omaguix
 prefix=
 if [ "${1:-}" = -p ]; then
   prefix=${2:?usage: scripts/vps-import [-p PREFIX] [TAG]}

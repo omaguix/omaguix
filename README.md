@@ -2,19 +2,19 @@
 
 CI for the Roguix desktop's packages: GitHub Actions builds the reference
 system for aarch64 and x86_64 and publishes the package store items no
-other configured server has, for `https://substitutes.roguix.org` to serve.
+other configured server has, for `https://substitutes.omaguix.org` to serve.
 
 | Repository | What it is |
 | --- | --- |
-| [roguixos/roguix](https://github.com/roguixos/roguix) | this one: the desktop feed's CI |
-| [roguixos/try-roguix](https://github.com/roguixos/try-roguix) | the macOS app and the Roguix desktop guest |
-| [roguixos/roguix-channel](https://github.com/roguixos/roguix-channel) | the desktop's channel, generated from try-roguix |
+| [omaguix/omaguix](https://github.com/omaguix/omaguix) | this one: the desktop feed's CI |
+| [omaguix/try-omaguix](https://github.com/omaguix/try-omaguix) | the macOS app and the Roguix desktop guest |
+| [omaguix/omaguix-channel](https://github.com/omaguix/omaguix-channel) | the desktop's channel, generated from try-omaguix |
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `.github/workflows/build-desktop.yml` | builds the authenticated roguix-channel's reference system on native ARM and x86_64 runners |
+| `.github/workflows/build-desktop.yml` | builds the authenticated omaguix-channel's reference system on native ARM and x86_64 runners |
 | `scripts/reference-system-licenses.scm` | licences of the reference system's packages, including service dependencies; requires `GUIX_SYSTEM` from the caller |
 | `scripts/desktop-split` | checks licences and splits the closure of the reference system's package outputs |
 | `scripts/ci-install-guix` | installs Guix on the runner |
@@ -26,7 +26,7 @@ other configured server has, for `https://substitutes.roguix.org` to serve.
 | `tests/` | secret-free fixtures and optional throwaway-key Guix integration |
 
 This repository has no packages of its own: the desktop's modules are
-published in roguix-channel, generated from try-roguix.
+published in omaguix-channel, generated from try-omaguix.
 
 ## Guix on the runners
 
@@ -45,8 +45,8 @@ script, and upload both tarballs to a release `guix-binary-VERSION` here.
 ## The reference-system feeds
 
 On a push to `main` touching its own inputs, `build-desktop.yml` resolves
-roguix-channel's `main` head with
-`git ls-remote https://github.com/roguixos/roguix-channel main` once for both
+omaguix-channel's `main` head with
+`git ls-remote https://github.com/omaguix/omaguix-channel main` once for both
 architectures. A `workflow_dispatch` instead requires `channel_commit`,
 validated as exactly 40 lowercase hexadecimal characters. The run name
 contains that input; push runs say `main (resolved at run time)` because
@@ -62,7 +62,7 @@ Each job has a 350-minute limit and its own architecture-specific
 concurrency group. Matrix fail-fast is disabled, so one architecture's
 failure does not cancel the other.
 
-Both jobs check out [roguix-channel](https://github.com/roguixos/roguix-channel)
+Both jobs check out [omaguix-channel](https://github.com/omaguix/omaguix-channel)
 at the resolved commit with full history and fetch its `keyring` branch.
 After installing Guix, each authenticates the channel from its introduction
 before reading its Guix pin or authorizing its substitute key:
@@ -76,12 +76,12 @@ guix git authenticate --keyring=origin/keyring --end="$CHANNEL_COMMIT" \
 Authentication failure stops the job. The channel's `.guix-channel` selects
 `modules`; the jobs read `modules/roguix/guix-commit` (currently
 `7e74121a40a8308166e328a23647cf6f3768e6c8`) and authorize
-`modules/roguix/substitutes.roguix.org.pub` from that authenticated checkout.
+`modules/roguix/substitutes.omaguix.org.pub` from that authenticated checkout.
 They build the channel-defined `(@ (roguix system) %roguix-reference-system)`
 with `ROGUIX_MODULES` set to the checkout's absolute `modules` path, the
 matrix's `--system` and `--no-grafts`. This is the entire reference system
 with default host settings and no extra packages, not a machine's
-hand-written list. Only bordeaux and substitutes.roguix.org are configured
+hand-written list. Only bordeaux and substitutes.omaguix.org are configured
 substitute servers.
 
 New `x86_64-desktop` releases now come from this reference system, including
@@ -96,7 +96,7 @@ lists that are in that closure, and splits their `guix gc -R` closure, so
 the files generated for the one reference system (system, etc, udev rules,
 pam.d, shepherd services and similar) are left out unless a package output
 references them: bordeaux items go to `vps-fetch.txt`, items already
-served by substitutes.roguix.org go to `vps-has.txt`, and the rest to
+served by substitutes.omaguix.org go to `vps-has.txt`, and the rest to
 `publish.txt`. Narinfo answers must be 200 or 404; licence and Broadcom
 `wl` checks cover `publish.txt`. The licence collector uses the matrix's
 `GUIX_SYSTEM` and observes package lowering throughout the system,
@@ -127,6 +127,16 @@ usable artifact. All workflow actions are pinned to full commit SHAs.
 ## Automatic signing and static substitutes
 
 See [decision 0001](docs/decisions/0001-sign-substitutes-in-ci.md).
+The Omaguix hostname rename uses the same fresh signing key, not another key
+rotation. Its public file's SHA256 is
+`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`;
+the channel coordinator owns and publishes it, not this repository.
+Guix module/package identifiers and store identities are unchanged, as are the
+channel authentication introduction, fingerprint and keyring. The local workflow
+checkout remains `roguix-channel`; archive names, static layout/state and CLI
+contracts remain unchanged. No rebuild or profile P integration is part of this
+URL cutover.
+
 Configure `substitute-signing` with **no required reviewers** and a deployment
 policy allowing only branch `main`, with no tag policies. Signing is automatic
 on main pushes. Manual signing requires `github.actor == github.repository_owner`;
@@ -134,9 +144,9 @@ in this organization-owned repository that literal check blocks human manual
 dispatch. Do not silently broaden it to organization members.
 These environment settings must be applied on GitHub; YAML cannot set them.
 
-Generate a fresh key off the VPS (on the owner's Guix machine) and store it
-only in environment secret `SUBSTITUTE_SIGNING_KEY`, after configuring the
-policy. Its public half is `modules/roguix/substitutes.roguix.org.pub` in the
+Keep the fresh key generated off the VPS (on the owner's Guix machine)
+only in environment secret `SUBSTITUTE_SIGNING_KEY`, under the configured
+policy; do not generate another key for the hostname rename. Its public half is `modules/roguix/substitutes.omaguix.org.pub` in the
 channel; guests trust only that key. Earlier theft remains valid (Guix has no revocation).
 Anyone able to push main/change its workflow, or a stolen owner session/token,
 can get code signed; there is no human release gate.
@@ -219,7 +229,7 @@ reconfigure), elsewhere with `guix archive --authorize`.
 
 The builder key signs what the VPS imports and republishes under its own
 key, which Roguix VMs trust: keep `BUILDER_SIGNING_KEY` to workflows on
-`main`. Once substitutes.roguix.org serves an earlier export for the same pin,
+`main`. Once substitutes.omaguix.org serves an earlier export for the same pin,
 the jobs can substitute those items instead of rebuilding them. The protected
-job also signs static substitutes directly with the fresh substitutes.roguix.org key;
+job also signs static substitutes directly with the fresh substitutes.omaguix.org key;
 only its signing step receives that key.
