@@ -7,8 +7,11 @@ Owner decisions of 2026-10-12: CI signs substitutes for
 the owner's Guix machine) and held only in environment secret
 `SUBSTITUTE_SIGNING_KEY`. The old `roguix.frolow.dev` key is erased from the VPS
 and GitHub. The public key is `modules/roguix/substitutes.omaguix.org.pub` in
-omaguix-channel; try-omaguix adds it. Until then the workflow does not run
-(pushes use `[skip ci]`).
+omaguix-channel; try-omaguix adds it. The original fresh key was subsequently
+superseded by the replacement recorded below. Until the authenticated channel
+publishes the current public key and current-key readiness is confirmed, the
+workflow does not run (pushes use `[skip ci]`). An empty valid HTTPS substitute
+tree is permitted for bootstrap.
 
 Protocol verified at Guix pin `7e74121a40a8308166e328a23647cf6f3768e6c8`:
 - [guix/scripts/publish.scm](https://github.com/guix-mirror/guix/blob/7e74121a40a8308166e328a23647cf6f3768e6c8/guix/scripts/publish.scm): `%nix-cache-info`, `narinfo-string`, `signed-string`, `bake-narinfo+nar`.
@@ -33,11 +36,18 @@ NAR**, not compressed bytes or an export bundle. Relative URLs resolve at root.
 
 The repositories are now `omaguix/omaguix`, `omaguix/omaguix-channel` and
 `omaguix/try-omaguix`. The substitute hostname is renamed to
-`substitutes.omaguix.org` with the same fresh key described above, not a further
-key rotation. The channel coordinator owns and publishes
-`modules/roguix/substitutes.omaguix.org.pub`; its exact file SHA256 is
-`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`.
-This repository does not publish that key.
+`substitutes.omaguix.org`. The original fresh key (SHA256
+`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`,
+AA89) is superseded; neither it nor the old VPS key is trusted.
+The channel coordinator owns and publishes the replacement at the unchanged
+path `modules/roguix/substitutes.omaguix.org.pub` in the authenticated channel;
+its exact file SHA256 is
+`5e9b4547f9a8409a42e658276deb6e3f4502f6715681a9617f8b105ea73b4f2a`.
+Root generated the replacement locally using Guix libgcrypt parameters;
+native key test/sign/verify succeeded. The environment secret
+`SUBSTITUTE_SIGNING_KEY` was replaced from memory at `2026-10-14T12:58:50Z`;
+no private file or MacBook access was used. No additional key is introduced
+for the hostname rename. This repository does not publish that key.
 
 Guix module/package identifiers and store identities, the authentication
 introduction/fingerprint/keyring, local workflow checkout path `roguix-channel`,

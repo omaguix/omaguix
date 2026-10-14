@@ -127,10 +127,18 @@ usable artifact. All workflow actions are pinned to full commit SHAs.
 ## Automatic signing and static substitutes
 
 See [decision 0001](docs/decisions/0001-sign-substitutes-in-ci.md).
-The Omaguix hostname rename uses the same fresh signing key, not another key
-rotation. Its public file's SHA256 is
-`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`;
+The current replacement signing public file's SHA256 is
+`5e9b4547f9a8409a42e658276deb6e3f4502f6715681a9617f8b105ea73b4f2a`;
 the channel coordinator owns and publishes it, not this repository.
+It supersedes the original fresh key (SHA256
+`f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`,
+AA89); neither that key nor the old VPS key is trusted.
+Root generated the replacement locally using Guix libgcrypt parameters;
+native key test/sign/verify succeeded, and `SUBSTITUTE_SIGNING_KEY` was replaced
+from memory at `2026-10-14T12:58:50Z`. No private file or MacBook access was used.
+Keep CI disabled (pushes use `[skip ci]`) until the authenticated channel
+publishes the current public key and current-key readiness is confirmed.
+An empty valid HTTPS substitute tree is permitted for bootstrap.
 Guix module/package identifiers and store identities are unchanged, as are the
 channel authentication introduction, fingerprint and keyring. The local workflow
 checkout remains `roguix-channel`; archive names, static layout/state and CLI
@@ -144,10 +152,11 @@ in this organization-owned repository that literal check blocks human manual
 dispatch. Do not silently broaden it to organization members.
 These environment settings must be applied on GitHub; YAML cannot set them.
 
-Keep the fresh key generated off the VPS (on the owner's Guix machine)
-only in environment secret `SUBSTITUTE_SIGNING_KEY`, under the configured
-policy; do not generate another key for the hostname rename. Its public half is `modules/roguix/substitutes.omaguix.org.pub` in the
-channel; guests trust only that key. Earlier theft remains valid (Guix has no revocation).
+Keep the current replacement key generated off the VPS only in environment
+secret `SUBSTITUTE_SIGNING_KEY`, under the configured policy; do not generate
+another key for the hostname rename. Its public half remains
+`modules/roguix/substitutes.omaguix.org.pub` in the authenticated channel;
+guests trust only that current key. Earlier theft remains valid (Guix has no revocation).
 Anyone able to push main/change its workflow, or a stolen owner session/token,
 can get code signed; there is no human release gate.
 
