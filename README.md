@@ -80,7 +80,8 @@ Authentication failure stops the job. The channel's `.guix-channel` selects
 
 A `guix-profile` job per architecture makes the Guix the release is built
 with (try-omaguix `docs/decisions/0007-move-vms-across-guix-pins.md`): it
-fetches that Guix commit G, commits G plus the channel's
+clones Guix, authenticates its history up to that commit G with Guix's own
+channel introduction, commits G plus the channel's
 `modules/omaguix/guix-skip-forward-check.patch` as G' with
 `scripts/guix-patched-commit` (a fixed identity and G's date, so both
 architectures make the same G'), pulls G' into a fresh profile P (with

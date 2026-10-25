@@ -110,8 +110,12 @@ jobs:
           [[ $pin =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid Guix pin"; exit 1; }
           patch=roguix-channel/modules/omaguix/guix-skip-forward-check.patch
           mkdir guix-profile
-          git init --quiet --bare guix.git
-          git -C guix.git fetch --quiet --depth=1 https://codeberg.org/guix/guix.git "$pin"
+          git clone --quiet --bare https://codeberg.org/guix/guix.git guix.git
+          # G's signed history, from Guix's own channel introduction, as
+          # guix time-machine would check it (the owner, 2026-10-25).
+          (cd guix.git && guix git authenticate --keyring=keyring --end="$pin" \
+            9edb3f66fd807b096b48283debdcddccfea34bad \
+            'BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA')
           patched=$(scripts/guix-patched-commit guix.git "$pin" "$patch")
           # A clone transfers only what a ref names.
           git -C guix.git update-ref refs/heads/omaguix "$patched"
@@ -120,7 +124,7 @@ jobs:
           echo "GUIX_PATCHED=$patched" >> "$GITHUB_ENV"
 
       # Authentication is off for this local Guix clone only: G' is CI's
-      # own commit. The channel was authenticated above.
+      # own commit on top of G, authenticated above like the channel.
       - name: Pull G' into a fresh profile
         run: |
           cat > channels.scm <<EOF
