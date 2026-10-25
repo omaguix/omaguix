@@ -10,6 +10,8 @@ on:
     paths:
       - scripts/ci-install-guix
       - scripts/desktop-split
+      - scripts/guix-patched-commit
+      - scripts/check-guix-profile
       - scripts/reference-system-licenses.scm
       - scripts/static-substitutes
       - scripts/static-tree
@@ -57,8 +59,93 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "Channel commit: $commit" >> "$GITHUB_STEP_SUMMARY"
 
-  build:
+  # The Guix a release is built with (try-omaguix docs/decisions/0007): the
+  # pin G plus the channel's patch, committed as G', pulled into a profile P
+  # whose own guix builds the system in the build job. VMs moving to this
+  # release substitute P, so it is split and served like the packages.
+  guix-profile:
     needs: resolve-channel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            prefix: aarch64-desktop
+          - runner: ubuntu-24.04
+            prefix: x86_64-desktop
+    runs-on: ${{ matrix.runner }}
+    env:
+      CHANNEL_COMMIT: ${{ needs.resolve-channel.outputs.commit }}
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: omaguix/omaguix-channel
+          ref: ${{ env.CHANNEL_COMMIT }}
+          path: roguix-channel
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the channel keyring
+        working-directory: roguix-channel
+        run: git fetch origin refs/heads/keyring:refs/remotes/origin/keyring
+
+      - name: Install Guix
+        run: scripts/ci-install-guix
+
+      - name: Authenticate the channel
+        working-directory: roguix-channel
+        run: |
+          guix git authenticate --keyring=origin/keyring --end="$CHANNEL_COMMIT" \
+            bcc938512706d19de86dd8c6f50853fa80b063b8 \
+            '7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E'
+
+      - name: Commit G plus the channel's patch as G'
+        run: |
+          pin=$(cat roguix-channel/modules/omaguix/guix-commit)
+          [[ $pin =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid Guix pin"; exit 1; }
+          patch=roguix-channel/modules/omaguix/guix-skip-forward-check.patch
+          mkdir guix-profile
+          git init --quiet --bare guix.git
+          git -C guix.git fetch --quiet --depth=1 https://codeberg.org/guix/guix.git "$pin"
+          patched=$(scripts/guix-patched-commit guix.git "$pin" "$patch")
+          # A clone transfers only what a ref names.
+          git -C guix.git update-ref refs/heads/omaguix "$patched"
+          printf '%s\n' "$patched" > guix-profile/guix-patched-commit.txt
+          sha256sum "$patch" | cut -d' ' -f1 > guix-profile/guix-patch-sha256.txt
+          echo "GUIX_PATCHED=$patched" >> "$GITHUB_ENV"
+
+      # Authentication is off for this local Guix clone only: G' is CI's
+      # own commit. The channel was authenticated above.
+      - name: Pull G' into a fresh profile
+        run: |
+          cat > channels.scm <<EOF
+          (list (channel (name 'guix) (url "file://$PWD/guix.git")
+                         (branch "omaguix") (commit "$GUIX_PATCHED")))
+          EOF
+          guix pull --disable-authentication --channels=channels.scm \
+            --substitute-urls="$SUBSTITUTE_URLS" --profile="$RUNNER_TEMP/guix"
+          profile=$(readlink -f "$RUNNER_TEMP/guix")
+          scripts/check-guix-profile "$profile" "$GUIX_PATCHED"
+          printf '%s\n' "$profile" > guix-profile/guix-profile.txt
+          guix archive --export -r "$profile" | zstd -T0 -12 > guix-profile/guix-profile.nar.zst
+          cp /etc/guix/signing-key.pub guix-profile/
+          ls -l guix-profile
+
+      - name: Upload the Guix profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guix-profile-${{ matrix.prefix }}
+          if-no-files-found: error
+          compression-level: 0
+          path: guix-profile/
+
+  build:
+    needs: [resolve-channel, guix-profile]
     strategy:
       fail-fast: false
       matrix:
@@ -107,7 +194,7 @@ jobs:
 
       - name: Read the authenticated reference system's Guix pin
         run: |
-          commit=$(cat roguix-channel/modules/roguix/guix-commit)
+          commit=$(cat roguix-channel/modules/omaguix/guix-commit)
           [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid Guix pin"; exit 1; }
           echo "GUIX_COMMIT=$commit" >> "$GITHUB_ENV"
           echo "ROGUIX_MODULES=$GITHUB_WORKSPACE/roguix-channel/modules" >> "$GITHUB_ENV"
@@ -117,19 +204,31 @@ jobs:
         run: |
           guix=$(command -v guix)
           # shellcheck disable=SC2024 # The public key is readable by the runner.
-          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/roguix/substitutes.omaguix.org.pub"
+          sudo "$guix" archive --authorize < "$ROGUIX_MODULES/omaguix/substitutes.omaguix.org.pub"
 
-      - name: Get the reference system's Guix
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: guix-profile-${{ matrix.prefix }}
+          path: guix-profile
+
+      # The key is the guix-profile job's, made on its runner in this run.
+      - name: Import the Guix profile
         run: |
-          guix time-machine --commit="$GUIX_COMMIT" \
-            --substitute-urls="$SUBSTITUTE_URLS" -- describe
+          guix=$(command -v guix)
+          # shellcheck disable=SC2024 # The public key is readable by the runner.
+          sudo "$guix" archive --authorize < guix-profile/signing-key.pub
+          zstd -dc guix-profile/guix-profile.nar.zst | guix archive --import
+          profile=$(< guix-profile/guix-profile.txt)
+          scripts/check-guix-profile "$profile" "$(< guix-profile/guix-patched-commit.txt)"
+          echo "GUIX_PROFILE_ITEM=$profile" >> "$GITHUB_ENV"
 
+      # P's own guix builds the system, so P is by construction the Guix
+      # the release names (try-omaguix docs/decisions/0007).
       - name: Build
         run: |
-          guix time-machine --commit="$GUIX_COMMIT" -- \
-            system build --no-grafts --system="$GUIX_SYSTEM" \
+          "$GUIX_PROFILE_ITEM/bin/guix" system build --no-grafts --system="$GUIX_SYSTEM" \
             --substitute-urls="$SUBSTITUTE_URLS" -L "$ROGUIX_MODULES" \
-            -e '(@ (roguix system) %roguix-reference-system)' | tee outputs.txt
+            -e '(@ (omaguix system) %omaguix-reference-system)' | tee outputs.txt
 
       # Grafts are not substitutable. Publish the package outputs the system
       # lowers and their closure, not the files generated for this system.
@@ -140,12 +239,14 @@ jobs:
           printf '%s\n' "$CHANNEL_COMMIT" > split/channel-commit.txt
           printf '%s\n' "$GUIX_COMMIT" > split/guix-commit.txt
           printf '%s\n' "$GUIX_SYSTEM" > split/system.txt
-          : > split/release-tag.txt
-          guix time-machine --commit="$GUIX_COMMIT" -- \
-            repl -L "$ROGUIX_MODULES" -- scripts/reference-system-licenses.scm > split/licenses.txt
+          cp guix-profile/{guix-profile,guix-patched-commit,guix-patch-sha256}.txt split/
+          "$GUIX_PROFILE_ITEM/bin/guix" repl -L "$ROGUIX_MODULES" -- \
+            scripts/reference-system-licenses.scm > split/licenses.txt
           # shellcheck disable=SC2046 # Guix emits whitespace-free store path arguments.
           guix gc -R $(cat outputs.txt) | sort -u > split/closure.txt
-          scripts/desktop-split split
+          # release.py and the sign job take the tag from the split.
+          tag="$PREFIX-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          scripts/desktop-split --guix-profile "$GUIX_PROFILE_ITEM" --release-tag "$tag" split
           wc -l split/*.txt
 
       - name: Export
@@ -191,6 +292,9 @@ jobs:
             split/guix-commit.txt
             split/system.txt
             split/release-tag.txt
+            split/guix-profile.txt
+            split/guix-patched-commit.txt
+            split/guix-patch-sha256.txt
             split/publish.txt
             split/vps-fetch.txt
             split/vps-has.txt
@@ -200,7 +304,8 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' ||
-       (github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner))
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'rofrol' && github.triggering_actor == 'rofrol'))
     needs: [resolve-channel, build]
     environment: substitute-signing
     permissions:
@@ -258,7 +363,7 @@ jobs:
           done
           diff -u <(sort -u input/split/{publish,vps-has,vps-fetch}.txt) \
             <(sort -u input/split/package-closure.txt)
-          [[ $(< roguix-channel/modules/roguix/guix-commit) == "$pin" ]]
+          [[ $(< roguix-channel/modules/omaguix/guix-commit) == "$pin" ]]
           [[ $(< input/split/guix-commit.txt) == "$pin" ]]
           [[ $(< input/split/channel-commit.txt) == "$CHANNEL_COMMIT" ]]
           case $PREFIX in
@@ -266,13 +371,31 @@ jobs:
             aarch64-desktop) expected=aarch64-linux ;;
           esac
           [[ $(< input/split/system.txt) == "$expected" ]]
+          # The Guix the release names (try-omaguix docs/decisions/0007).
+          profile=$(< input/split/guix-profile.txt)
+          [[ $profile =~ ^/gnu/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$ ]]
+          grep -qxF "$profile" input/split/package-closure.txt
+          patch=roguix-channel/modules/omaguix/guix-skip-forward-check.patch
+          [[ $(< input/split/guix-patch-sha256.txt) == $(sha256sum "$patch" | cut -d' ' -f1) ]]
+          # G' is made again here from the authenticated pin and patch, so
+          # both architectures' builds name the same, expected commit.
+          git init --quiet --bare guix.git
+          git -C guix.git fetch --quiet --depth=1 https://codeberg.org/guix/guix.git "$pin"
+          [[ $(< input/split/guix-patched-commit.txt) == $(scripts/guix-patched-commit guix.git "$pin" "$patch") ]]
+          # GitHub drops empty files from artifacts: absent is empty.
+          tag=$(cat input/split/release-tag.txt 2>/dev/null || true)
+          if [[ -s input/split/publish.txt ]]; then
+            [[ $tag =~ ^$PREFIX-[0-9]{8}-[0-9a-f]{7}-[0-9]+$ ]] || { echo "Invalid release tag: $tag" >&2; exit 1; }
+          else
+            [[ -z $tag ]] || { echo "Release tag $tag with nothing to publish" >&2; exit 1; }
+          fi
           if [[ ! -s input/split/publish.txt ]]; then
             echo "has-export=false" >> "$GITHUB_OUTPUT"
             echo "No new items: preserve the previous release for legacy importers."
             exit 0
           fi
           echo "has-export=true" >> "$GITHUB_OUTPUT"
-          key="$GITHUB_WORKSPACE/roguix-channel/modules/roguix/substitutes.omaguix.org.pub"
+          key="$GITHUB_WORKSPACE/roguix-channel/modules/omaguix/substitutes.omaguix.org.pub"
           # shellcheck disable=SC2024 # Both public keys are runner-readable.
           sudo "$(command -v guix)" archive --authorize < "$key"
           # shellcheck disable=SC2024
@@ -290,7 +413,6 @@ jobs:
             zstd -dc "input/roguix-$PREFIX.nar.zst" | \
               guix time-machine --commit="$pin" -- archive --import
           fi
-          tag="$PREFIX-$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
           echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
           python3 -m unittest discover -s tests -v
 
@@ -300,7 +422,7 @@ jobs:
           SUBSTITUTE_SIGNING_KEY: ${{ secrets.SUBSTITUTE_SIGNING_KEY }}
         run: |
           scripts/static-substitutes bake --split input/split --output static-release \
-            --key roguix-channel/modules/roguix/substitutes.omaguix.org.pub \
+            --key roguix-channel/modules/omaguix/substitutes.omaguix.org.pub \
             --tag "$RELEASE_TAG" --workflow-commit "$GITHUB_SHA"
 
       - name: Release the verified tree and compatibility archive

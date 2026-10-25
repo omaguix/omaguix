@@ -6,7 +6,7 @@ Owner decisions of 2026-10-12: CI signs substitutes for
 `https://substitutes.omaguix.org` with a **fresh** key generated off the VPS (on
 the owner's Guix machine) and held only in environment secret
 `SUBSTITUTE_SIGNING_KEY`. The old `roguix.frolow.dev` key is erased from the VPS
-and GitHub. The public key is `modules/roguix/substitutes.omaguix.org.pub` in
+and GitHub. The public key is `modules/omaguix/substitutes.omaguix.org.pub` in
 omaguix-channel; try-omaguix adds it. The original fresh key was subsequently
 superseded by the replacement recorded below. Until the authenticated channel
 publishes the current public key and current-key readiness is confirmed, the
@@ -40,7 +40,7 @@ The repositories are now `omaguix/omaguix`, `omaguix/omaguix-channel` and
 `f59f581309d9270a1e8b12b9c73313ca74cb66143c7cf39535c0c251bc309881`,
 AA89) is superseded; neither it nor the old VPS key is trusted.
 The channel coordinator owns and publishes the replacement at the unchanged
-path `modules/roguix/substitutes.omaguix.org.pub` in the authenticated channel;
+path `modules/omaguix/substitutes.omaguix.org.pub` in the authenticated channel;
 its exact file SHA256 is
 `5e9b4547f9a8409a42e658276deb6e3f4502f6715681a9617f8b105ea73b4f2a`.
 Root generated the replacement locally using Guix libgcrypt parameters;
@@ -66,8 +66,11 @@ Add a separate signing job on a fresh runner with
 `environment: substitute-signing`. Owner amendment: sign automatically on main,
 with **no required reviewers and no per-release approval**. Its deployment branch
 policy permits only the `main` branch, not tags. The signing job also checks the
-main ref; manual `workflow_dispatch` signing requires
-`github.actor == github.repository_owner`. Push signing has no actor restriction.
+main ref; manual `workflow_dispatch` signing requires `github.actor` and
+`github.triggering_actor` to be the maintainer's account `rofrol` (amended
+2026-10-25: the owner of this organization-owned repository is the
+organization, so the earlier `github.actor == github.repository_owner` blocked
+the release tool's dispatch). Push signing has no actor restriction.
 Checkout and artifact download actions are allowed, pinned to full commit SHAs.
 Use this run's export/lists and reviewed workflow/pin, not artifact scripts.
 Only this job gets `contents: write`; other token permissions stay minimal.
@@ -148,7 +151,7 @@ VPS compromise can deny/replay downloads, not newly steal the key.
 Anyone who can push to main or change its workflow, or a stolen owner session/
 token, can get code signed. There is no human release gate. GitHub/runner
 compromise and bad builder output remain risks. In an organization-owned repo,
-the literal actor/owner comparison disables human manual signing; pushes still
-sign automatically. Hashes/signatures are not reproducible-build proof or freshness/
+manual signing is limited to the maintainer's account; pushes still sign
+automatically. Hashes/signatures are not reproducible-build proof or freshness/
 availability guarantees. Bordeaux loss/pruning can force builds; personal-site
 security and channel signing are outside scope.

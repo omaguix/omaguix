@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Check that PROFILE is a store item whose guix describes exactly one
+# channel, guix, at COMMIT: G', the Guix a release names.
+#
+#   scripts/check-guix-profile PROFILE COMMIT
+set -euo pipefail
+profile=${1:?usage: scripts/check-guix-profile PROFILE COMMIT}
+commit=${2:?usage: scripts/check-guix-profile PROFILE COMMIT}
+if [[ ! $profile =~ ^/gnu/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$ ]]; then
+  echo "check-guix-profile: $profile is not a store item" >&2
+  exit 1
+fi
+"$profile/bin/guix" describe --format=json | python3 -c '
+import json, sys
+channels = json.load(sys.stdin)
+found = [(c["name"], c["commit"]) for c in channels]
+if found != [("guix", sys.argv[1])]:
+    sys.exit(f"check-guix-profile: the profile describes {found}, not guix at {sys.argv[1]}")
+' "$commit"

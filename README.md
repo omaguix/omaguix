@@ -37,7 +37,7 @@ in this repository's `guix-binary-1.5.0` release. Each architecture has a
 pinned sha256, verified with Efraim Flashner's release signing key
 `A28BF40C3E551372662D14F741AAE7DCCA3D8351`. The script starts a root
 guix-daemon and authorizes bordeaux's and ci's keys; it never runs
-`guix pull` (the jobs use `guix time-machine`). To update: verify both new
+`guix pull` itself. To update: verify both new
 tarballs' `.sig` files from `ftp.gnu.org` with `gpg --verify` against the
 release signing key, change `VERSION` and both `SHA256` values in the
 script, and upload both tarballs to a release `guix-binary-VERSION` here.
@@ -74,11 +74,21 @@ guix git authenticate --keyring=origin/keyring --end="$CHANNEL_COMMIT" \
 ```
 
 Authentication failure stops the job. The channel's `.guix-channel` selects
-`modules`; the jobs read `modules/roguix/guix-commit` (currently
+`modules`; the jobs read `modules/omaguix/guix-commit` (currently
 `7e74121a40a8308166e328a23647cf6f3768e6c8`) and authorize
-`modules/roguix/substitutes.omaguix.org.pub` from that authenticated checkout.
-They build the channel-defined `(@ (roguix system) %roguix-reference-system)`
-with `ROGUIX_MODULES` set to the checkout's absolute `modules` path, the
+`modules/omaguix/substitutes.omaguix.org.pub` from that authenticated checkout.
+
+A `guix-profile` job per architecture makes the Guix the release is built
+with (try-omaguix `docs/decisions/0007-move-vms-across-guix-pins.md`): it
+fetches that Guix commit G, commits G plus the channel's
+`modules/omaguix/guix-skip-forward-check.patch` as G' with
+`scripts/guix-patched-commit` (a fixed identity and G's date, so both
+architectures make the same G'), pulls G' into a fresh profile P (with
+authentication off for that local Guix clone only), checks that
+`P/bin/guix describe` names G', and hands P's exported closure to the
+build job. The build job imports it and builds the channel-defined
+`(@ (omaguix system) %omaguix-reference-system)` with `P/bin/guix`, so P is
+by construction the Guix that built the release; with `ROGUIX_MODULES` set to the checkout's absolute `modules` path, the
 matrix's `--system` and `--no-grafts`. This is the entire reference system
 with default host settings and no extra packages, not a machine's
 hand-written list. Only bordeaux and substitutes.omaguix.org are configured
@@ -103,7 +113,8 @@ served by substitutes.omaguix.org go to `vps-has.txt`, and the rest to
 including services, and checks their package closures, not just the system
 profile. The splitter fails on unfree or unknown licences, Broadcom `wl`,
 ambiguous server answers, per-machine items to publish that are no package
-output, or an item to publish with a reference (`guix gc --references`) in
+output (P, named `-profile`, is the one exception, passed with
+`--guix-profile`; its closure joins the split like a package's), or an item to publish with a reference (`guix gc --references`) in
 none of the three lists, which the VPS could not import.
 
 On `main`, nonempty `publish.txt` is exported with `BUILDER_SIGNING_KEY` as
@@ -114,11 +125,14 @@ Only that job has `contents: write`. No new release is made when `publish.txt`
 is empty, preserving the legacy importer's latest nonempty archive. Grafts
 are not substitutable, so only ungrafted items are published.
 
-The build also uploads diagnostics as `split-PREFIX` with `channel-commit.txt`,
-`guix-commit.txt`, `system.txt`, `release-tag.txt`, `publish.txt`,
-`vps-fetch.txt`, `vps-has.txt`, and `package-closure.txt`. The old release tag
-marker stays empty; the signing job records the actual tag in its manifest.
-Upload uses
+The build also uploads `split-PREFIX`, which try-omaguix's `release.py`
+reads, with `channel-commit.txt`, `guix-commit.txt`, `system.txt`,
+`release-tag.txt` (the tag when `publish.txt` is nonempty, else empty),
+`guix-profile.txt` (P), `guix-patched-commit.txt` (G'),
+`guix-patch-sha256.txt`, `publish.txt`, `vps-fetch.txt`, `vps-has.txt`, and
+`package-closure.txt`. The signing job takes the tag from the split and
+checks it, P's place in the package closure, G' and the patch's SHA-256
+before signing anything. Upload uses
 `always()` gated on a successful split: it includes empty publish lists
 when no release is needed and preserves completed split results even if
 export or release fails, but does not present an incomplete split as a
@@ -147,15 +161,17 @@ URL cutover.
 
 Configure `substitute-signing` with **no required reviewers** and a deployment
 policy allowing only branch `main`, with no tag policies. Signing is automatic
-on main pushes. Manual signing requires `github.actor == github.repository_owner`;
-in this organization-owned repository that literal check blocks human manual
-dispatch. Do not silently broaden it to organization members.
+on main pushes. Manual signing requires both `github.actor` and
+`github.triggering_actor` to be the maintainer's account, `rofrol`: in this
+organization-owned repository `github.repository_owner` is the organization,
+which never dispatches, and a re-run by another member must not sign. Do not
+broaden it to organization members.
 These environment settings must be applied on GitHub; YAML cannot set them.
 
 Keep the current replacement key generated off the VPS only in environment
 secret `SUBSTITUTE_SIGNING_KEY`, under the configured policy; do not generate
 another key for the hostname rename. Its public half remains
-`modules/roguix/substitutes.omaguix.org.pub` in the authenticated channel;
+`modules/omaguix/substitutes.omaguix.org.pub` in the authenticated channel;
 guests trust only that current key. Earlier theft remains valid (Guix has no revocation).
 Anyone able to push main/change its workflow, or a stolen owner session/token,
 can get code signed; there is no human release gate.

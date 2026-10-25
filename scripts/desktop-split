@@ -3,7 +3,7 @@
 # the reference-system workflow. Only reads public narinfo URLs and the
 # local store.
 #
-#   scripts/desktop-split DIR
+#   scripts/desktop-split [--guix-profile P] [--release-tag TAG] DIR
 #
 # Publishes package outputs and their closure, not the files generated for
 # the one reference system (system, etc, udev rules, pam.d, shepherd
@@ -21,6 +21,11 @@
 #   vps-fetch.txt        items bordeaux serves: the VPS substitutes them
 #   vps-has.txt          items substitutes.omaguix.org already serves: not exported
 #   publish.txt          the rest, exported: the VPS has nowhere to fetch them
+#   release-tag.txt      TAG when publish.txt is not empty, else empty
+#
+# P is the Guix profile the system was built with (try-omaguix
+# docs/decisions/0007): it joins the package outputs, so P and its closure
+# are split, checked and served like them.
 #
 # It fails, publishing nothing, when a server gives no clear answer, when
 # an item to publish is unfree ("Nonfree" or a licence Guix cannot name) or
@@ -29,7 +34,21 @@
 # per-machine (keys, host names, password hashes), or when an item to
 # publish references a store path in none of the three lists.
 set -euo pipefail
-dir=$(cd "${1:?usage: scripts/desktop-split DIR}" && pwd)
+usage='usage: scripts/desktop-split [--guix-profile P] [--release-tag TAG] DIR'
+profile='' tag=''
+while [[ $# -gt 1 ]]; do
+  case $1 in
+    --guix-profile) profile=${2:?$usage}; shift 2 ;;
+    --release-tag) tag=${2:?$usage}; shift 2 ;;
+    *) echo "$usage" >&2; exit 1 ;;
+  esac
+done
+dir=$(cd "${1:?$usage}" && pwd)
+store_item='^/gnu/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._?=-]+$'
+if [[ -n $profile && ! $profile =~ $store_item ]]; then
+  echo "desktop-split: the Guix profile $profile is not a store item" >&2
+  exit 1
+fi
 
 awk '{ print $1 }' "$dir/licenses.txt" | sort -u |
   comm -12 - <(sort -u "$dir/closure.txt") > "$dir/packages.txt"
@@ -38,7 +57,8 @@ if [ ! -s "$dir/packages.txt" ]; then
   exit 1
 fi
 closure=$dir/package-closure.txt
-xargs guix gc -R < "$dir/packages.txt" | sort -u > "$closure"
+{ cat "$dir/packages.txt"; [[ -z $profile ]] || echo "$profile"; } |
+  xargs guix gc -R | sort -u > "$closure"
 echo "desktop-split: $(wc -l < "$dir/packages.txt") package outputs," \
   "$(wc -l < "$closure") items in their closure," \
   "$(sort -u "$dir/closure.txt" | comm -23 - "$closure" | wc -l) system items left out"
@@ -91,7 +111,9 @@ while read -r item; do
     echo "desktop-split: Broadcom wl to publish: $item" >&2
     fail=1
   fi
-  if [[ -$name =~ $per_machine ]] && ! grep -qxF "$item" "$dir/packages.txt"; then
+  # P is a profile, named like one, and no package output.
+  if [[ -$name =~ $per_machine && $item != "$profile" ]] &&
+    ! grep -qxF "$item" "$dir/packages.txt"; then
     echo "desktop-split: per-machine item to publish: $item" >&2
     fail=1
   fi
@@ -111,6 +133,16 @@ while read -r item; do
 done < "$dir/publish.txt"
 rm "$dir/known.txt"
 [ "$fail" = 0 ] || exit 1
+
+if [[ -s $dir/publish.txt && -z $tag ]]; then
+  echo "desktop-split: items to publish but no --release-tag" >&2
+  exit 1
+fi
+if [[ -s $dir/publish.txt ]]; then
+  printf '%s\n' "$tag" > "$dir/release-tag.txt"
+else
+  : > "$dir/release-tag.txt"
+fi
 
 echo "publish: $(wc -l < "$dir/publish.txt")," \
   "VPS fetches: $(wc -l < "$dir/vps-fetch.txt"), VPS has: $(wc -l < "$dir/vps-has.txt")"

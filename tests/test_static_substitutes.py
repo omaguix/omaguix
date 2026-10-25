@@ -250,13 +250,13 @@ server.serve_forever()
     def test_url_cutover_preserves_local_and_guix_contracts(self):
         source = (ROOT / ".github/workflows/build-desktop.yml").read_text()
         self.assertIn("git ls-remote https://github.com/omaguix/omaguix-channel main", source)
-        self.assertEqual(source.count("repository: omaguix/omaguix-channel"), 2)
-        self.assertEqual(source.count("path: roguix-channel"), 2)
-        self.assertEqual(source.count("bcc938512706d19de86dd8c6f50853fa80b063b8"), 2)
-        self.assertEqual(source.count("7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E"), 2)
-        self.assertEqual(source.count("--keyring=origin/keyring"), 2)
-        for text in ("https://substitutes.omaguix.org", "roguix/substitutes.omaguix.org.pub",
-                     "(@ (roguix system) %roguix-reference-system)", "roguix-$PREFIX.nar.zst"):
+        self.assertEqual(source.count("repository: omaguix/omaguix-channel"), 3)
+        self.assertEqual(source.count("path: roguix-channel"), 3)
+        self.assertEqual(source.count("bcc938512706d19de86dd8c6f50853fa80b063b8"), 3)
+        self.assertEqual(source.count("7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E"), 3)
+        self.assertEqual(source.count("--keyring=origin/keyring"), 3)
+        for text in ("https://substitutes.omaguix.org", "omaguix/substitutes.omaguix.org.pub",
+                     "(@ (omaguix system) %omaguix-reference-system)", "roguix-$PREFIX.nar.zst"):
             self.assertIn(text, source)
         importer = (ROOT / "scripts/vps-import").read_text()
         for text in ("repo=omaguix/omaguix", "prefix=${prefix:-x86_64-desktop}",
@@ -270,7 +270,7 @@ server.serve_forever()
         self.assertIn('(read-narinfo p "https://substitutes.omaguix.org")', verifier)
         self.assertIn('(equal? (uri-host uri) "substitutes.omaguix.org")', verifier)
         for path in [ROOT / ".github/workflows/build-desktop.yml", ROOT / "README.md",
-                     ROOT / "docs/decisions/0001-sign-substitutes-in-ci.md", *sorted((ROOT / "scripts").iterdir())]:
+                     ROOT / "docs/decisions/0001-sign-substitutes-in-ci.md", *sorted(p for p in (ROOT / "scripts").iterdir() if p.is_file())]:
             text = path.read_text()
             for old in ("roguixos/roguix", "roguixos/try-roguix", "substitutes.roguix.org"):
                 self.assertNotIn(old, text, str(path))
@@ -279,9 +279,11 @@ server.serve_forever()
         source = (ROOT / ".github/workflows/build-desktop.yml").read_text()
         sign = source.split("  sign-substitutes:")[1]
         for text in ("github.ref == 'refs/heads/main'", "github.event_name == 'push'",
-                     "github.event_name == 'workflow_dispatch'", "github.actor == github.repository_owner",
+                     "github.event_name == 'workflow_dispatch'", "github.actor == 'rofrol'",
+                     "github.triggering_actor == 'rofrol'",
                      "environment: substitute-signing"):
             self.assertIn(text, sign)
+        self.assertNotIn("repository_owner", source)
         self.assertEqual(source.count("contents: write"), 1)
         self.assertEqual(source.count("secrets.SUBSTITUTE_SIGNING_KEY"), 1)
         import re

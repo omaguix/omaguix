@@ -5,7 +5,7 @@
 (use-modules (gnu system) (guix) (guix packages) (guix gexp)
              (guix grafts) (guix derivations) (guix licenses)
              (guix monads) (ice-9 match) (srfi srfi-1)
-             (roguix system))
+             (omaguix system))
 
 (define system
   (or (getenv "GUIX_SYSTEM")
@@ -40,7 +40,7 @@
   (parameterize ((%graft? #f)
                  (%current-system system))
     (run-with-store store
-      (operating-system-derivation %roguix-reference-system)
+      (operating-system-derivation %omaguix-reference-system)
       #:system system)
     (when (null? packages)
       (error "reference system lowering observed no packages"))
