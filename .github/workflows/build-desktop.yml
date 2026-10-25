@@ -225,6 +225,10 @@ jobs:
           profile=$(< guix-profile/guix-profile.txt)
           scripts/check-guix-profile "$profile" "$(< guix-profile/guix-patched-commit.txt)"
           echo "GUIX_PROFILE_ITEM=$profile" >> "$GITHUB_ENV"
+          # The system's own Guix is P, as omaguix-update pins it in a VM.
+          # Unset, (omaguix system) rebuilds Guix from P's channel, whose
+          # file:// URL is the guix-profile job's runner.
+          echo "OMAGUIX_GUIX=$profile" >> "$GITHUB_ENV"
 
       # P's own guix builds the system, so P is by construction the Guix
       # the release names (try-omaguix docs/decisions/0007).
