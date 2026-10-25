@@ -116,7 +116,9 @@ jobs:
           (cd guix.git && guix git authenticate --keyring=keyring --end="$pin" \
             9edb3f66fd807b096b48283debdcddccfea34bad \
             'BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA')
-          patched=$(scripts/guix-patched-commit guix.git "$pin" "$patch")
+          # G, or the fork commit F with a Guix fix the channel names.
+          base=$(scripts/guix-base guix.git roguix-channel/modules)
+          patched=$(scripts/guix-patched-commit guix.git "$base" "$patch")
           # A clone transfers only what a ref names.
           git -C guix.git update-ref refs/heads/omaguix "$patched"
           printf '%s\n' "$patched" > guix-profile/guix-patched-commit.txt
@@ -229,6 +231,9 @@ jobs:
           # Unset, (omaguix system) rebuilds Guix from P's channel, whose
           # file:// URL is the guix-profile job's runner.
           echo "OMAGUIX_GUIX=$profile" >> "$GITHUB_ENV"
+          # P's daemon, so its builtins (builtin:git-download) run P's Guix,
+          # with the fixes G' carries, not the binary tarball's.
+          scripts/ci-guix-daemon "$profile"
 
       # P's own guix builds the system, so P is by construction the Guix
       # the release names (try-omaguix docs/decisions/0007).
@@ -389,7 +394,8 @@ jobs:
           # both architectures' builds name the same, expected commit.
           git init --quiet --bare guix.git
           git -C guix.git fetch --quiet --depth=1 https://codeberg.org/guix/guix.git "$pin"
-          [[ $(< input/split/guix-patched-commit.txt) == $(scripts/guix-patched-commit guix.git "$pin" "$patch") ]]
+          base=$(scripts/guix-base guix.git roguix-channel/modules)
+          [[ $(< input/split/guix-patched-commit.txt) == $(scripts/guix-patched-commit guix.git "$base" "$patch") ]]
           # GitHub drops empty files from artifacts: absent is empty.
           tag=$(cat input/split/release-tag.txt 2>/dev/null || true)
           if [[ -s input/split/publish.txt ]]; then

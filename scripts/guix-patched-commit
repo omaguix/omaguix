@@ -5,6 +5,8 @@
 #   scripts/guix-patched-commit REPO G PATCH
 #
 # REPO is a Git repository holding commit G (a shallow fetch is enough).
+# G is the channel's pin, or the fork commit on top of it that
+# scripts/guix-base names.
 # Prints G'. The commit is made from G's tree and the patch only, with a
 # fixed identity and G's committer date, so every architecture's runner
 # makes the same G'. It fails unless reverting the patch from G' gives

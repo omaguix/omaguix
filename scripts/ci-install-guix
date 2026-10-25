@@ -23,7 +23,6 @@ URLS=(
   "https://github.com/omaguix/omaguix/releases/download/guix-binary-$VERSION/$TARBALL"
 )
 GUIX_PATH=/var/guix/profiles/per-user/root/current-guix
-SOCKET=/var/guix/daemon-socket/socket
 
 tmp=${RUNNER_TEMP:-$(mktemp -d)}
 tarball=$tmp/$TARBALL
@@ -55,30 +54,10 @@ done
 # unprivileged user namespaces that Ubuntu 24.04's AppArmor restricts; run it
 # as root with build users, like the action.
 sudo cp "$GUIX_PATH/lib/systemd/system/gnu-store.mount" /etc/systemd/system/
-sudo tee /etc/systemd/system/guix-daemon.service > /dev/null <<EOF
-[Unit]
-Description=Build daemon for GNU Guix
-
-[Service]
-ExecStart=$GUIX_PATH/bin/guix-daemon --build-users-group=guixbuild --discover=no
-Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
-OOMPolicy=continue
-Restart=always
-TasksMax=8192
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo chmod 644 /etc/systemd/system/{gnu-store.mount,guix-daemon.service}
+sudo chmod 644 /etc/systemd/system/gnu-store.mount
 sudo systemctl daemon-reload
-sudo systemctl enable --now gnu-store.mount guix-daemon.service
-
-# systemd reports the daemon started once it is exec'd, before it listens.
-for _ in $(seq 50); do
-  test -S "$SOCKET" && break
-  sleep 0.2 # delay: polling for the socket guix-daemon creates on start
-done
-test -S "$SOCKET" || { sudo systemctl status guix-daemon; exit 1; }
+sudo systemctl enable --now gnu-store.mount
+"$(dirname "$0")/ci-guix-daemon" "$GUIX_PATH"
 
 echo "$GUIX_PATH/bin" >> "$GITHUB_PATH"
 

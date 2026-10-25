@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# The commit G' is made on (try-omaguix docs/decisions/0007): the channel's
+# Guix pin G, or, while the channel's guix-fork names a commit F of a Guix
+# fork, F, which must be one commit on top of G (a fix not yet in Guix).
+#
+#   scripts/guix-base REPO MODULES
+#
+# REPO is a Git repository holding G; F is fetched into it.  MODULES is the
+# channel's modules directory.  Prints the commit.
+set -euo pipefail
+repo=${1:?usage: scripts/guix-base REPO MODULES}
+modules=${2:?usage: scripts/guix-base REPO MODULES}
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null LC_ALL=C
+pin=$(< "$modules/omaguix/guix-commit")
+[[ $pin =~ ^[0-9a-f]{40}$ ]] || { echo "guix-base: invalid Guix pin $pin" >&2; exit 1; }
+fork=$modules/omaguix/guix-fork
+if [[ ! -e $fork ]]; then
+  echo "$pin"
+  exit 0
+fi
+content=$(< "$fork")
+[[ $content != *$'\n'* ]] || { echo "guix-base: $fork has more than one line" >&2; exit 1; }
+read -r url commit rest <<< "$content"
+[[ $url =~ ^(https|file)://[A-Za-z0-9./_-]+$ && $commit =~ ^[0-9a-f]{40}$ && -z ${rest:-} ]] \
+  || { echo "guix-base: $fork is not 'URL COMMIT'" >&2; exit 1; }
+# A shallow REPO (the sign job's) gets F alone; a full one keeps its history
+# whole, since G' is pulled from it.
+if [[ $(git -C "$repo" rev-parse --is-shallow-repository) == true ]]; then
+  git -C "$repo" fetch --quiet --depth=1 "$url" "$commit"
+else
+  git -C "$repo" fetch --quiet "$url" "$commit"
+fi
+# The commit object itself, which a shallow fetch does not graft.
+parents=$(git -C "$repo" cat-file commit "$commit" | sed -n '/^$/q; s/^parent //p')
+if [[ $parents != "$pin" ]]; then
+  echo "guix-base: $commit's parents are not exactly $pin: $parents" >&2
+  exit 1
+fi
+echo "$commit"

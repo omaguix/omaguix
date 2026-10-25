@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Serve the runner's store with the guix-daemon of Guix GUIX, a Guix
+# installation or a pulled profile, through systemd socket activation.
+#
+#   scripts/ci-guix-daemon GUIX
+#
+# systemd listens on the daemon's socket itself, so clients can connect as
+# soon as this returns, and the next connection after a switch starts GUIX's
+# daemon.  A pulled profile's guix-daemon runs its builtins, such as
+# builtin:git-download, with that profile's guix (try-omaguix
+# docs/decisions/0007).  Run as the runner user; it uses sudo.
+set -euo pipefail
+guix=${1:?usage: scripts/ci-guix-daemon GUIX}
+test -x "$guix/bin/guix-daemon"
+
+# Each unit is written beside its place and renamed into it.
+install_unit() {
+  sudo tee "/etc/systemd/system/$1.tmp" > /dev/null
+  sudo chmod 644 "/etc/systemd/system/$1.tmp"
+  sudo mv "/etc/systemd/system/$1.tmp" "/etc/systemd/system/$1"
+}
+
+install_unit guix-daemon.socket <<EOF
+[Unit]
+Description=Socket of the build daemon for GNU Guix
+
+[Socket]
+ListenStream=/var/guix/daemon-socket/socket
+SocketMode=0666
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target
+EOF
+install_unit guix-daemon.service <<EOF
+[Unit]
+Description=Build daemon for GNU Guix
+Requires=guix-daemon.socket gnu-store.mount
+After=gnu-store.mount
+
+[Service]
+ExecStart=$guix/bin/guix-daemon --build-users-group=guixbuild --discover=no
+Environment='GUIX_LOCPATH=/var/guix/profiles/per-user/root/guix-profile/lib/locale' LC_ALL=en_US.utf8
+OOMPolicy=continue
+Restart=always
+TasksMax=8192
+EOF
+sudo systemctl daemon-reload
+# A daemon of another Guix stops; the socket keeps listening.
+sudo systemctl stop guix-daemon.service
+sudo systemctl enable --now guix-daemon.socket
+
+# This connection starts the service; check that it runs GUIX.
+"$guix/bin/guix" gc --list-failures > /dev/null
+pid=$(systemctl show --property=MainPID --value guix-daemon.service)
+# A pulled profile's guix-daemon is a wrapper that sets GUIX to its guix and
+# execs the daemon; an installation's is the daemon itself.
+runs_guix() {
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+  sudo cat "/proc/$pid/environ" | tr '\0' '\n' \
+    | grep -qxF "GUIX=$(readlink -f "$guix/bin/guix")" && return 0
+  [[ $(sudo readlink -f "/proc/$pid/exe") == $(readlink -f "$guix/bin/guix-daemon") ]]
+}
+if ! runs_guix; then
+  echo "ci-guix-daemon: the daemon (pid $pid) does not run $guix" >&2
+  sudo systemctl status guix-daemon.service >&2
+  exit 1
+fi
+echo "ci-guix-daemon: guix-daemon pid $pid runs $guix"

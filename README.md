@@ -18,6 +18,8 @@ other configured server has, for `https://substitutes.omaguix.org` to serve.
 | `scripts/reference-system-licenses.scm` | licences of the reference system's packages, including service dependencies; requires `GUIX_SYSTEM` from the caller |
 | `scripts/desktop-split` | checks licences and splits the closure of the reference system's package outputs |
 | `scripts/ci-install-guix` | installs Guix on the runner |
+| `scripts/ci-guix-daemon` | serves the runner's store with a given Guix's guix-daemon, socket-activated |
+| `scripts/guix-base` | the commit G' is made on: the pin, or the channel's Guix fork commit on top of it |
 | `modules/roguix/builder.pub` | CI's archive signing key; the secret half is the `BUILDER_SIGNING_KEY` Actions secret |
 | `scripts/vps-import` | legacy archive import, or opt-in static release installation |
 | `scripts/static-substitutes` | shell orchestration of pinned Guix publishing and mirroring |
@@ -36,7 +38,7 @@ architectures fail), from `ftpmirror.gnu.org`, or, if that fails, the copy
 in this repository's `guix-binary-1.5.0` release. Each architecture has a
 pinned sha256, verified with Efraim Flashner's release signing key
 `A28BF40C3E551372662D14F741AAE7DCCA3D8351`. The script starts a root
-guix-daemon and authorizes bordeaux's and ci's keys; it never runs
+guix-daemon through `scripts/ci-guix-daemon`, socket-activated, and authorizes bordeaux's and ci's keys; it never runs
 `guix pull` itself. To update: verify both new
 tarballs' `.sig` files from `ftp.gnu.org` with `gpg --verify` against the
 release signing key, change `VERSION` and both `SHA256` values in the
@@ -87,7 +89,14 @@ channel introduction, commits G plus the channel's
 architectures make the same G'), pulls G' into a fresh profile P (with
 authentication off for that local Guix clone only), checks that
 `P/bin/guix describe` names G', and hands P's exported closure to the
-build job. The build job imports it and builds the channel-defined
+build job. While the channel's `modules/omaguix/guix-fork` names a
+commit F of a Guix fork (`URL COMMIT`, for a fix not yet in Guix),
+`scripts/guix-base` fetches F, checks that its only parent is G, and G' is
+F plus the patch instead; F is not authenticated by Guix's introduction,
+the signed channel commit that names it is. The build job imports P,
+switches the runner's daemon to P's `guix-daemon` with
+`scripts/ci-guix-daemon`, so that daemon builtins such as
+builtin:git-download run P's Guix rather than the tarball's, and builds the channel-defined
 `(@ (omaguix system) %omaguix-reference-system)` with `P/bin/guix`, so P is
 by construction the Guix that built the release; with `ROGUIX_MODULES` set to the checkout's absolute `modules` path, the
 matrix's `--system` and `--no-grafts`. This is the entire reference system
