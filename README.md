@@ -123,8 +123,9 @@ served by substitutes.omaguix.org go to `vps-has.txt`, and the rest to
 including services, and checks their package closures, not just the system
 profile. The splitter fails on unfree or unknown licences, Broadcom `wl`,
 ambiguous server answers, per-machine items to publish that are no package
-output (P, named `-profile`, is the one exception, passed with
-`--guix-profile`; its closure joins the split like a package's), or an item to publish with a reference (`guix gc --references`) in
+output and not in the closure of P (passed with `--guix-profile`; its
+closure joins the split like a package's and is made from G' alone, before
+the system), or an item to publish with a reference (`guix gc --references`) in
 none of the three lists, which the VPS could not import.
 
 On `main`, nonempty `publish.txt` is exported with `BUILDER_SIGNING_KEY` as

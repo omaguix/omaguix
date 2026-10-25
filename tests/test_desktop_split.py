@@ -115,14 +115,31 @@ class DesktopSplit(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no --release-tag", result.stderr)
 
-    def test_only_the_named_profile_is_exempt_from_the_per_machine_refusal(self):
-        other = item("6", "profile")
-        self.graph[PROFILE] = [GUIX, other]
-        self.graph[other] = []
+    def test_per_machine_names_in_the_profile_closure_are_published(self):
+        node, profile = item("6", "guix-system"), item("7", "profile")
+        self.graph[PROFILE] = [GUIX, node]
+        self.graph[node] = [profile]
+        self.graph[profile] = []
+        result = self.split("--guix-profile", PROFILE, "--release-tag", "t")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue({node, profile, PROFILE} <= set(self.lines("publish.txt")))
+
+    def test_per_machine_names_outside_the_profile_closure_are_refused(self):
+        node = item("6", "guix-system")
+        self.graph[PACKAGE] = [LIBC, node]
+        self.graph[node] = []
         result = self.split("--guix-profile", PROFILE, "--release-tag", "t")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"per-machine item to publish: {other}", result.stderr)
+        self.assertIn(f"per-machine item to publish: {node}", result.stderr)
         self.assertNotIn(f"per-machine item to publish: {PROFILE}\n", result.stderr)
+
+    def test_broadcom_wl_in_the_profile_closure_is_refused(self):
+        wl = item("6", "wl-6.30.223.271")
+        self.graph[PROFILE] = [GUIX, wl]
+        self.graph[wl] = []
+        result = self.split("--guix-profile", PROFILE, "--release-tag", "t")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Broadcom wl to publish: {wl}", result.stderr)
 
     def test_a_profile_that_is_no_store_item_is_refused(self):
         for bad in ("/tmp/profile", "/gnu/store/short-profile", PROFILE + "/bin/guix"):

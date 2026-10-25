@@ -25,7 +25,10 @@
 #
 # P is the Guix profile the system was built with (try-omaguix
 # docs/decisions/0007): it joins the package outputs, so P and its closure
-# are split, checked and served like them.
+# are split, checked and served like them.  P is made from G' alone before
+# the system is built, so nothing in its closure was generated for this
+# machine; the per-machine refusal skips it (G' patches core modules, so
+# (guix self) nodes such as guix-system are not bordeaux's).
 #
 # It fails, publishing nothing, when a server gives no clear answer, when
 # an item to publish is unfree ("Nonfree" or a licence Guix cannot name) or
@@ -93,6 +96,9 @@ awk '$1 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/vps-fetch.txt"
 awk '$1 != 200 && $2 == 200 { print $3 }' "$dir/closure-status.txt" > "$dir/vps-has.txt"
 awk '$1 != 200 && $2 != 200 { print $3 }' "$dir/closure-status.txt" > "$dir/publish.txt"
 
+: > "$dir/profile-closure.txt"
+[[ -z $profile ]] || guix gc -R "$profile" < /dev/null | sort -u > "$dir/profile-closure.txt"
+
 fail=0
 unfree=$(awk '$3 ~ /Nonfree|unknown/ { print $1 }' "$dir/licenses.txt" |
   grep -xF -f - "$dir/publish.txt" || true)
@@ -111,13 +117,13 @@ while read -r item; do
     echo "desktop-split: Broadcom wl to publish: $item" >&2
     fail=1
   fi
-  # P is a profile, named like one, and no package output.
-  if [[ -$name =~ $per_machine && $item != "$profile" ]] &&
-    ! grep -qxF "$item" "$dir/packages.txt"; then
+  if [[ -$name =~ $per_machine ]] &&
+    ! grep -qxF "$item" "$dir/packages.txt" "$dir/profile-closure.txt"; then
     echo "desktop-split: per-machine item to publish: $item" >&2
     fail=1
   fi
 done < "$dir/publish.txt"
+rm "$dir/profile-closure.txt"
 [ "$fail" = 0 ] || exit 1
 
 # The VPS imports publish.txt and must find every reference of it in the
