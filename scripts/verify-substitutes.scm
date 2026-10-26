@@ -4,6 +4,9 @@
              (gcrypt hash) (gcrypt pk-crypto) (rnrs bytevectors)
              (ice-9 rdelim) (ice-9 binary-ports) (srfi srfi-1)
              (srfi srfi-13) (srfi srfi-71) (web uri))
+;; As in (guix scripts authenticate), which does not export it.
+(define read-canonical-sexp
+  (compose string->canonical-sexp read-string))
 (define public-key
   (call-with-input-file (getenv "STATIC_PUBLIC_KEY") read-canonical-sexp))
 (define acl (public-keys->acl (list public-key)))

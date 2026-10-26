@@ -5,8 +5,10 @@
   (call-with-output-file (string-append directory "/" name)
     (lambda (port) (display (canonical-sexp->string key) port)))
   (chmod (string-append directory "/" name) #o600))
+;; The parameters of `guix archive --generate-key' (guix/scripts/archive.scm),
+;; which made the real signing key.
 (define parameters
-  (string->canonical-sexp "(genkey (ecc (curve Ed25519) (flags eddsa)))"))
+  (string->canonical-sexp "(genkey (ecdsa (curve Ed25519) (flags rfc6979)))"))
 (define pair (generate-key parameters))
 (write-key "test.pub" (find-sexp-token pair 'public-key))
 (write-key "test.sec" (find-sexp-token pair 'private-key))
