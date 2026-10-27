@@ -104,6 +104,17 @@ jobs:
             bcc938512706d19de86dd8c6f50853fa80b063b8 \
             '7D1A 8B40 0C26 0998 097F  63E5 28B8 3B16 11FA 815E'
 
+      # Bordeaux has no substitutes for P's (guix self) nodes, since the
+      # fork patches a core module, so without this every run compiles them.
+      # A release whose G' did not change substitutes the previous release's
+      # P, signed with this key (the owner, 2026-10-27); whatever no server
+      # has, such as most of a new G', is still built here.
+      - name: Trust substitutes.omaguix.org substitutes
+        run: |
+          guix=$(command -v guix)
+          # shellcheck disable=SC2024 # The public key is readable by the runner.
+          sudo "$guix" archive --authorize < roguix-channel/modules/omaguix/substitutes.omaguix.org.pub
+
       - name: Commit G plus the channel's patch as G'
         run: |
           pin=$(cat roguix-channel/modules/omaguix/guix-commit)

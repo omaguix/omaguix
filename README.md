@@ -93,7 +93,13 @@ build job. While the channel's `modules/omaguix/guix-fork` names a
 commit F of a Guix fork (`URL COMMIT`, for a fix not yet in Guix),
 `scripts/guix-base` fetches F, checks that its only parent is G, and G' is
 F plus the patch instead; F is not authenticated by Guix's introduction,
-the signed channel commit that names it is. The build job imports P,
+the signed channel commit that names it is. The pull trusts
+substitutes.omaguix.org's key from the authenticated channel as well as
+bordeaux's and ci's: bordeaux has no substitutes for P's `(guix self)`
+nodes once the fork patches a core module, so a release whose G' did not
+change substitutes the previous release's P instead of compiling it, and
+whatever no server has, such as most of a new G', is built in the job
+(the owner, 2026-10-27). The build job imports P,
 switches the runner's daemon to P's `guix-daemon` with
 `scripts/ci-guix-daemon`, so that daemon builtins such as
 builtin:git-download run P's Guix rather than the tarball's, and builds the channel-defined
